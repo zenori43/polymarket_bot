@@ -391,25 +391,9 @@ class OrderExecutorBot:
                 logger.debug(
                     f"OrderExecutorBot: GATE 2 FAIL – CLOB+slug unavailable for {clob_fail_secs:.1f}s"
                 )
-                self._print_status(
-                    clob_price=None,
-                    gate_results=[
-                        (True,  _gate1_msg),
-                        (False, "Gate 2: ไม่มีราคา (CLOB+slug unavailable)"),
-                    ],
-                )
                 return
         if price in settings.PRICE_FORBIDDEN:
-            logger.warning(
-                f"OrderExecutorBot: GATE 2 FAIL – price={price} is in PRICE_FORBIDDEN"
-            )
-            self._print_status(
-                clob_price=clob_price,
-                gate_results=[
-                    (True,  _gate1_msg),
-                    (False, f"Gate 2: price=${price:.3f} (forbidden)"),
-                ],
-            )
+            logger.debug(f"OrderExecutorBot: GATE 2 FAIL – price={price} is in PRICE_FORBIDDEN")
             return
         self._clob_unavailable_since = None
         logger.debug(f"OrderExecutorBot: GATE 2 PASS – price={price}")
@@ -424,15 +408,6 @@ class OrderExecutorBot:
         # ── GATE 3: Delta Gate ────────────────────────────────────────
         if sig.signal == "NEUTRAL":
             logger.debug("OrderExecutorBot: GATE 3 FAIL – signal=NEUTRAL")
-            self._print_status(
-                clob_price=clob_price,
-                gamma_price=gamma_price,
-                gate_results=[
-                    (True,  _gate1_msg),
-                    (True,  _gate2_msg),
-                    (False, "Gate 3: signal=NEUTRAL"),
-                ],
-            )
             return
 
         # Task A3: Dynamic delta threshold
@@ -450,15 +425,6 @@ class OrderExecutorBot:
                 f"OrderExecutorBot: GATE 3 FAIL – |Δ%|={abs_delta:.4f}% "
                 f"< effective_entry_threshold={effective_entry_threshold}%"
             )
-            self._print_status(
-                clob_price=clob_price,
-                gamma_price=gamma_price,
-                gate_results=[
-                    (True,  _gate1_msg),
-                    (True,  _gate2_msg),
-                    (False, f"Gate 3: |Δ%|={abs_delta:.4f}% < {effective_entry_threshold}%"),
-                ],
-            )
             return
         logger.debug(
             f"OrderExecutorBot: GATE 3 PASS – signal={sig.signal} |Δ%|={abs_delta:.4f}%"
@@ -467,7 +433,6 @@ class OrderExecutorBot:
         # Print status showing all gates passed before proceeding
         self._print_status(
             clob_price=clob_price,
-            gamma_price=gamma_price,
             gate_results=[
                 (True, _gate1_msg),
                 (True, _gate2_msg),

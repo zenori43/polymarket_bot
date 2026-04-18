@@ -322,6 +322,7 @@ class OrderExecutorBot:
                         logger.debug("OrderExecutorBot: market expired – discovering next market")
                     discovered = await self._auto_discover_market()
                     if not discovered:
+                        logger.debug("OrderExecutorBot: รอตลาดใหม่ – ยังไม่มี market ที่ accept orders")
                         await asyncio.sleep(30)
                     else:
                         await asyncio.sleep(1)

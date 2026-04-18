@@ -420,7 +420,7 @@ class PolymarketClient:
                 except Exception:
                     continue
                 filtered.append(m)
-            logger.info(f"find_active_btc_markets: found {len(filtered)} BTC 5-min markets")
+            logger.debug(f"find_active_btc_markets: found {len(filtered)} BTC 5-min markets")
             return filtered
         except Exception as exc:
             logger.error(f"find_active_btc_markets error: {exc}")

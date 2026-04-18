@@ -366,11 +366,8 @@ class OrderExecutorBot:
         logger.debug(f"OrderExecutorBot: GATE 1 PASS – elapsed={elapsed}s")
         _gate1_msg = f"Gate 1: +{elapsed:03d}s (in window)"
 
-        # ── GATE 2: Price Gate ────────────────────────────────────────
+        # ── GATE 2: Price Gate (CLOB only) ───────────────────────────
         clob_price: Optional[float] = await self._client.get_price_clob(self._market_id)
-        gamma_price: Optional[float] = await self._client.get_price_gamma(self._market_id)
-
-        # CLOB ต้องมีก่อน ถึงจะเข้า order — Gamma ใช้แค่แสดงผล
         price = clob_price
 
         if clob_price is None:
@@ -379,14 +376,12 @@ class OrderExecutorBot:
                 self._clob_unavailable_since = now_ts
             clob_fail_secs = now_ts - self._clob_unavailable_since
             if clob_fail_secs < 5.0:
-                # ยังไม่ถึง 5 วิ — รอก่อน ไม่ log
                 return
             logger.debug(
                 f"OrderExecutorBot: GATE 2 FAIL – CLOB unavailable for {clob_fail_secs:.1f}s"
             )
             self._print_status(
                 clob_price=clob_price,
-                gamma_price=gamma_price,
                 gate_results=[
                     (True,  _gate1_msg),
                     (False, "Gate 2: CLOB unavailable"),
@@ -399,29 +394,14 @@ class OrderExecutorBot:
             )
             self._print_status(
                 clob_price=clob_price,
-                gamma_price=gamma_price,
                 gate_results=[
                     (True,  _gate1_msg),
                     (False, f"Gate 2: price=${price:.3f} (forbidden)"),
                 ],
             )
             return
-        # ราคา Gamma ต้องอยู่ใน [0.60, 0.90] ไม่เช่นนั้น upside จำกัดหรือ over-priced
-        if gamma_price is not None and not (0.60 <= gamma_price <= 0.90):
-            logger.warning(
-                f"OrderExecutorBot: GATE 2 FAIL – Gamma price={gamma_price:.3f} out of range [0.60, 0.90]"
-            )
-            self._print_status(
-                clob_price=clob_price,
-                gamma_price=gamma_price,
-                gate_results=[
-                    (True,  _gate1_msg),
-                    (False, f"Gate 2: Gamma=${gamma_price:.3f} out of [0.60, 0.90]"),
-                ],
-            )
-            return
-        self._clob_unavailable_since = None  # reset เมื่อ CLOB กลับมา
-        logger.debug(f"OrderExecutorBot: GATE 2 PASS – price={price} clob_ok=True")
+        self._clob_unavailable_since = None
+        logger.debug(f"OrderExecutorBot: GATE 2 PASS – price={price}")
         _gate2_msg = f"Gate 2: price=${price:.3f} (ok)"
 
         # Derive up/down prices from the raw market price and signal direction
@@ -855,8 +835,8 @@ class OrderExecutorBot:
                 # หยุดดึงราคาช่วง 10 วิท้าย (ตลาดใกล้ปิด)
                 token = self._yes_token_id or self._market_id
                 clob_p = await self._client.get_price_clob(token) if secs_remaining > 10 else None
-                gamma_p = await self._client.get_price_gamma(self._market_id) if secs_remaining > 10 else None
-                price = clob_p if clob_p is not None else gamma_p
+                gamma_p = None
+                price = clob_p
 
                 # คำนวณ elapsed
                 elapsed = _seconds_in_current_5min_window()
@@ -896,22 +876,12 @@ class OrderExecutorBot:
                 print(f" {BOLD}ตลาด 5 นาที ครั้งที่ {self._market_round}{RESET}{dry_tag}  │  {stats}")
                 print(f" {CYAN}🕐 {now_str}{RESET}  {gate_str}  +{elapsed}s{countdown}{order_str}")
 
-                yes_p = clob_p if clob_p is not None else gamma_p
+                yes_p = clob_p
                 no_p = round(1 - yes_p, 3) if yes_p is not None else None
                 if yes_p and no_p:
                     print(f"  Up: ${yes_p:.3f}  │  Down: ${no_p:.3f}")
-
-                # Gate 2 status
-                clob_ok = clob_p is not None
-                gamma_ok = gamma_p is not None and (0.60 <= gamma_p <= 0.90)
-                clob_status = f"{GREEN}CLOB ✓{RESET}" if clob_ok else f"{RED}CLOB ✗{RESET}"
-                if gamma_p is None:
-                    gamma_status = f"{YELLOW}Gamma ?{RESET}"
-                elif gamma_ok:
-                    gamma_status = f"{GREEN}Gamma ✓ ${gamma_p:.3f}{RESET}"
-                else:
-                    gamma_status = f"{RED}Gamma ✗ ${gamma_p:.3f} (ต้อง 0.60–0.90){RESET}"
-                print(f"  {clob_status}  {gamma_status}")
+                clob_status = f"{GREEN}CLOB ✓{RESET}" if clob_p is not None else f"{RED}CLOB ✗{RESET}"
+                print(f"  {clob_status}")
 
                 # แสดง position ถ้ามี
                 pos = self._state.open_position

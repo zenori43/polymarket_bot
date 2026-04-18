@@ -93,10 +93,16 @@ class PolymarketClient:
             logger.debug(f"CLOB price for {market_id}: {price}")
             return price
         except httpx.TimeoutException:
-            logger.warning(f"CLOB price request timed out for market_id={market_id}")
+            logger.debug(f"CLOB price timeout for market_id={market_id}")
+            return None
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                logger.debug(f"CLOB price 404 for market_id={market_id} (no liquidity)")
+            else:
+                logger.warning(f"CLOB price HTTP {exc.response.status_code} for market_id={market_id}")
             return None
         except Exception as exc:
-            logger.error(f"CLOB price fetch error for market_id={market_id}: {exc}")
+            logger.debug(f"CLOB price unavailable for market_id={market_id}: {exc}")
             return None
 
     async def get_price_gamma(self, market_id: str) -> Optional[float]:

@@ -381,7 +381,7 @@ class OrderExecutorBot:
             if clob_fail_secs < 5.0:
                 # ยังไม่ถึง 5 วิ — รอก่อน ไม่ log
                 return
-            logger.warning(
+            logger.debug(
                 f"OrderExecutorBot: GATE 2 FAIL – CLOB unavailable for {clob_fail_secs:.1f}s"
             )
             self._print_status(
@@ -389,7 +389,7 @@ class OrderExecutorBot:
                 gamma_price=gamma_price,
                 gate_results=[
                     (True,  _gate1_msg),
-                    (False, f"Gate 2: CLOB unavailable ({clob_fail_secs:.0f}s)"),
+                    (False, "Gate 2: CLOB unavailable"),
                 ],
             )
             return
@@ -962,19 +962,24 @@ class OrderExecutorBot:
         """
         print(SEP)
 
-        # ── Line 1: timestamp + market window ─────────────────────────
-        now_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
+        # ── Line 1: timestamp + market window (ET) ───────────────────
+        from datetime import timedelta
+        try:
+            from zoneinfo import ZoneInfo
+            _et = ZoneInfo("America/New_York")
+        except ImportError:
+            _et = timezone.utc
+        now_str = datetime.now(_et).strftime("%H:%M:%S")
         if self._market_end_date:
             try:
                 end_dt = datetime.fromisoformat(
                     self._market_end_date.replace("Z", "+00:00")
                 )
-                end_hhmm = end_dt.strftime("%H:%M")
-                # Approximate window start as 5 minutes before end
-                from datetime import timedelta
-                start_dt = end_dt - timedelta(minutes=5)
-                start_hhmm = start_dt.strftime("%H:%M")
-                window_str = f"  {start_hhmm}→{end_hhmm}"
+                end_et = end_dt.astimezone(_et)
+                start_et = end_et - timedelta(minutes=5)
+                end_hhmm = end_et.strftime("%I:%M%p").lstrip("0")
+                start_hhmm = start_et.strftime("%I:%M%p").lstrip("0")
+                window_str = f"  {start_hhmm}→{end_hhmm} ET"
             except Exception:
                 window_str = ""
         else:

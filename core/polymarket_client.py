@@ -74,8 +74,8 @@ class PolymarketClient:
 
         Returns None on timeout or any error.
         """
-        url = f"{settings.CLOB_URL}/prices"
-        params = {"token_id": market_id}
+        url = f"{settings.CLOB_URL}/price"
+        params = {"token_id": market_id, "side": "BUY"}
         try:
             client = await self._get_client()
             resp = await client.get(
@@ -85,10 +85,9 @@ class PolymarketClient:
             )
             resp.raise_for_status()
             data = resp.json()
-            # Expected shape: {"price": "0.52"} or {"mid": "0.52"}
             price_str: Optional[str] = data.get("price") or data.get("mid")
             if price_str is None:
-                logger.warning(f"CLOB price response missing 'price'/'mid' key for {market_id}: {data}")
+                logger.warning(f"CLOB price response missing 'price' key for {market_id}: {data}")
                 return None
             price = float(price_str)
             logger.debug(f"CLOB price for {market_id}: {price}")

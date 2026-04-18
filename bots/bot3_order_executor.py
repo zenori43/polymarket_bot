@@ -377,7 +377,10 @@ class OrderExecutorBot:
         _gate1_msg = f"Gate 1: +{elapsed:03d}s (in window)"
 
         # ── GATE 2: Price Gate (CLOB only) ───────────────────────────
-        clob_price: Optional[float] = await self._client.get_price_clob(self._market_id)
+        # ใช้ YES token_id เสมอ — ราคา NO = 1 - YES
+        clob_price: Optional[float] = await self._client.get_price_clob(
+            self._yes_token_id or self._market_id
+        )
         price = clob_price
 
         if clob_price is None:
@@ -413,6 +416,9 @@ class OrderExecutorBot:
             self._last_skip_reason = f"ราคา ${price:.3f} ห้ามเข้า"
             return
         self._clob_unavailable_since = None
+        # ปรับราคาตาม signal — ถ้า DOWN ใช้ราคา NO token = 1 - YES
+        if sig.signal == "DOWN":
+            price = round(1 - price, 4)
         _gate2_msg = f"Gate 2: price=${price:.3f} (ok)"
 
         # ── GATE 3: Delta Gate ────────────────────────────────────────

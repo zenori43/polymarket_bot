@@ -475,73 +475,75 @@ class OrderExecutorBot:
     async def _execute_order(self, sig: DeltaSignal, entry_price: float) -> None:
         """Build order_args and submit via PolymarketClient, then enter monitor loop."""
 
-        # เลือก YES หรือ NO token ตาม signal direction
-        if sig.signal == "UP":
-            token_id = self._yes_token_id or self._market_id
-        else:  # DOWN
-            token_id = self._no_token_id or self._market_id
-
-        order_args = {
-            "token_id": token_id,
-            "price":    entry_price,
-            "size":     _DEFAULT_ORDER_SIZE_USDC,
-            "side":     "BUY",
-        }
-
-        logger.info(
-            f"OrderExecutorBot: submitting order signal={sig.signal} "
-            f"token_id={token_id} entry_price={entry_price} size={_DEFAULT_ORDER_SIZE_USDC}"
-        )
-
-        # รอ 3 วิ แล้ว re-confirm ว่า delta ยังเกิน threshold (กัน spike)
-        logger.info("OrderExecutorBot: waiting 3s to confirm delta is not a spike...")
-        await asyncio.sleep(3)
-        latest = self._bus.latest()
-        if latest is None or latest.signal != sig.signal:
-            logger.info(
-                f"OrderExecutorBot: delta spike detected after 3s – aborting order "
-                f"(signal flipped to {latest.signal if latest else 'None'})"
-            )
+        # Lock ก่อน 3s sleep เพื่อกัน race condition (signal สองอันเข้าพร้อมกัน)
+        if self._monitoring:
             return
-        effective_threshold = settings.ENTRY_RANGE_LOWER + (0.05 if abs(latest.ema_trade_delta) > 0.2 else 0.0)
-        if abs(latest.delta) < effective_threshold:
-            logger.info(
-                f"OrderExecutorBot: delta dropped below threshold after 3s "
-                f"({abs(latest.delta):.4f}% < {effective_threshold:.4f}%) – aborting"
-            )
-            return
-        logger.info(f"OrderExecutorBot: delta confirmed after 3s – proceeding with order")
+        self._monitoring = True
+
+        try:
+            # เลือก YES หรือ NO token ตาม signal direction
+            if sig.signal == "UP":
+                token_id = self._yes_token_id or self._market_id
+            else:  # DOWN
+                token_id = self._no_token_id or self._market_id
+
+            order_args = {
+                "token_id": token_id,
+                "price":    entry_price,
+                "size":     _DEFAULT_ORDER_SIZE_USDC,
+                "side":     "BUY",
+            }
+
+            # รอ 3 วิ แล้ว re-confirm ว่า delta ยังเกิน threshold (กัน spike)
+            logger.debug("OrderExecutorBot: waiting 3s to confirm delta is not a spike...")
+            await asyncio.sleep(3)
+            latest = self._bus.latest()
+            if latest is None or latest.signal != sig.signal:
+                logger.debug(f"OrderExecutorBot: spike – signal flipped, aborting")
+                self._monitoring = False
+                return
+            effective_threshold = settings.ENTRY_RANGE_LOWER + (0.05 if abs(latest.ema_trade_delta) > 0.2 else 0.0)
+            if abs(latest.delta) < effective_threshold:
+                logger.debug(f"OrderExecutorBot: delta dropped after 3s – aborting")
+                self._monitoring = False
+                return
+        except Exception:
+            self._monitoring = False
+            raise
 
         try:
             result = await self._client.submit_order(order_args)
         except Exception as exc:
             logger.error(f"OrderExecutorBot: submit_order raised: {exc}")
+            self._monitoring = False
             return
 
         if result.get("error"):
             logger.error(f"OrderExecutorBot: order REJECTED: {result['error']}")
+            self._monitoring = False
             return
 
         self._last_order_signal = sig.signal
-        logger.info(f"OrderExecutorBot: order ACCEPTED – response={result}")
+        dry_tag = " [DRY RUN]" if settings.DRY_RUN else ""
+        logger.info(
+            f"ORDER {sig.signal}{dry_tag} @ ${entry_price:.3f} size={_DEFAULT_ORDER_SIZE_USDC} "
+            f"id={result.get('orderID') or result.get('id')}"
+        )
 
-        # Build a minimal position dict for the monitor loop
         position: dict = {
             "market":      self._market_id,
-            "token_id":    token_id,       # token used for this position (YES or NO)
+            "token_id":    token_id,
             "entry_price": entry_price,
             "signal":      sig.signal,
             "size":        _DEFAULT_ORDER_SIZE_USDC,
             "order_id":    result.get("orderID") or result.get("id"),
+            "opened_at":   int(time.time()),
+            "market_id":   self._market_id,
         }
 
-        # Persist position to state
-        position["opened_at"] = int(time.time())
-        position["market_id"] = self._market_id
         self._state.open_position(position)
         self._state.market_id = self._market_id
 
-        self._monitoring = True
         try:
             await self.monitor_loop(position)
         finally:

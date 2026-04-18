@@ -18,8 +18,9 @@ _LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # Ensure logs directory exists relative to the project root.
 # __file__ is  <project_root>/utils/logger.py  →  parent is <project_root>
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_LOG_FILE = os.path.join(_PROJECT_ROOT, "logs", "bot.log")
-os.makedirs(os.path.dirname(_LOG_FILE), exist_ok=True)
+_LOG_DIR = os.path.join(_PROJECT_ROOT, "logs")
+_LOG_FILE = os.path.join(_LOG_DIR, "bot.log")
+os.makedirs(_LOG_DIR, exist_ok=True)
 
 _LOG_FORMAT = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{line} | {message}"
 
@@ -47,6 +48,8 @@ _logger.add(
     backtrace=True,
     diagnose=True,
     encoding="utf-8",
+    delay=True,
+    catch=True,
 )
 
 

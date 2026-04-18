@@ -101,6 +101,7 @@ class OrderExecutorBot:
         # Task A5: Panic sell cooldown tracking
         self._consecutive_panic_sells: int = 0
         self.PANIC_COOLDOWN_TRADES = 3  # stop after 3 consecutive
+        self._market_round: int = 0  # นับตลาดที่ผ่านมา
         self._clob_unavailable_since: float | None = None  # timestamp เมื่อ CLOB เริ่ม fail
 
     def _send_panic_email(self) -> None:
@@ -194,11 +195,11 @@ class OrderExecutorBot:
             self._market_id = str(market["id"])
             self._yes_token_id, self._no_token_id = token_ids
             self._market_end_date = market.get("endDate")
+            self._market_round += 1
             logger.info(
                 f"OrderExecutorBot: _auto_discover_market SUCCESS – "
+                f"ตลาด 5 นาที ครั้งที่ {self._market_round} "
                 f"market_id={self._market_id} "
-                f"YES={self._yes_token_id[:12]}... "
-                f"NO={self._no_token_id[:12]}... "
                 f"endDate={self._market_end_date}"
             )
             return True
@@ -850,8 +851,10 @@ class OrderExecutorBot:
                     pass
 
                 now_str = datetime.now().strftime("%H:%M:%S")
+                stats = self._state.get_summary()
 
                 print(SEP)
+                print(f" {BOLD}ตลาด 5 นาที ครั้งที่ {self._market_round}{RESET}  │  {stats}")
                 print(f" {CYAN}🕐 {now_str}{RESET}  {gate_str}  +{elapsed}s{countdown}")
 
                 if price is not None:

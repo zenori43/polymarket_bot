@@ -101,6 +101,7 @@ class OrderExecutorBot:
         self._market_slug: str | None = None
         self._outcome_up: float | None = None   # Up (YES) price จาก outcomePrices
         self._outcome_down: float | None = None  # Down (NO) price จาก outcomePrices
+        self._last_skip_reason: str | None = None  # สาเหตุล่าสุดที่ไม่เข้า
         # Task A5: Panic sell cooldown tracking
         self._consecutive_panic_sells: int = 0
         self.PANIC_COOLDOWN_TRADES = 3  # stop after 3 consecutive
@@ -406,57 +407,26 @@ class OrderExecutorBot:
                 clob_price = fallback_price
                 price = fallback_price
             else:
-                logger.debug(
-                    f"OrderExecutorBot: GATE 2 FAIL – CLOB+slug unavailable for {clob_fail_secs:.1f}s"
-                )
+                self._last_skip_reason = "ไม่มีราคา (CLOB+fallback ✗)"
                 return
         if price in settings.PRICE_FORBIDDEN:
-            logger.debug(f"OrderExecutorBot: GATE 2 FAIL – price={price} is in PRICE_FORBIDDEN")
+            self._last_skip_reason = f"ราคา ${price:.3f} ห้ามเข้า"
             return
         self._clob_unavailable_since = None
-        logger.debug(f"OrderExecutorBot: GATE 2 PASS – price={price}")
         _gate2_msg = f"Gate 2: price=${price:.3f} (ok)"
-
-        # Derive up/down prices from the raw market price and signal direction
-        if sig.signal == "UP":
-            _up_price, _down_price = price, round(1 - price, 3)
-        else:
-            _down_price, _up_price = price, round(1 - price, 3)
 
         # ── GATE 3: Delta Gate ────────────────────────────────────────
         if sig.signal == "NEUTRAL":
-            logger.debug("OrderExecutorBot: GATE 3 FAIL – signal=NEUTRAL")
             return
 
-        # Task A3: Dynamic delta threshold
         effective_entry_threshold = settings.ENTRY_RANGE_LOWER
         if abs(sig.ema_trade_delta) > 0.2:
             effective_entry_threshold += 0.05
-            logger.info(
-                f"OrderExecutorBot: high volume detected (ema_trade_delta={sig.ema_trade_delta:.4f}), "
-                f"bumping threshold to {effective_entry_threshold:.3f}"
-            )
 
         abs_delta = abs(sig.delta)
         if abs_delta < effective_entry_threshold:
-            logger.debug(
-                f"OrderExecutorBot: GATE 3 FAIL – |Δ%|={abs_delta:.4f}% "
-                f"< effective_entry_threshold={effective_entry_threshold}%"
-            )
+            self._last_skip_reason = f"Δ={abs_delta:.4f}% ต่ำกว่า threshold {effective_entry_threshold:.3f}%"
             return
-        logger.debug(
-            f"OrderExecutorBot: GATE 3 PASS – signal={sig.signal} |Δ%|={abs_delta:.4f}%"
-        )
-
-        # Print status showing all gates passed before proceeding
-        self._print_status(
-            clob_price=clob_price,
-            gate_results=[
-                (True, _gate1_msg),
-                (True, _gate2_msg),
-                (True, f"Gate 3: signal={sig.signal} |Δ%|={abs_delta:.4f}%"),
-            ],
-        )
 
         # ── CHECK: USDC Cash Balance ──────────────────────────────────
         cash_wallet = settings.FUNDER or settings.WALLET_ADDRESS
@@ -471,15 +441,13 @@ class OrderExecutorBot:
                 usdc_balance = await self._client.get_usdc_balance_polygon(cash_wallet)
                 logger.info(f"OrderExecutorBot: after claim balance=${usdc_balance:.2f}")
             if usdc_balance < 5.0:
-                logger.warning(f"OrderExecutorBot: balance still ${usdc_balance:.2f} after claim – skipping trade")
+                self._last_skip_reason = f"เงินไม่พอ ${usdc_balance:.2f} (< $5)"
                 return
             logger.info(f"OrderExecutorBot: balance restored to ${usdc_balance:.2f} – proceeding")
 
         # ── CHECK: Existing Position ──────────────────────────────────
         if self._monitoring:
-            logger.info(
-                "OrderExecutorBot: POSITION CHECK FAIL – already monitoring an open position"
-            )
+            self._last_skip_reason = "มี position เปิดอยู่แล้ว"
             return
 
         existing = await self._client.get_open_positions(settings.WALLET_ADDRESS)
@@ -487,10 +455,7 @@ class OrderExecutorBot:
             p for p in existing if p.get("market") == self._market_id
         ]
         if open_for_market:
-            logger.info(
-                f"OrderExecutorBot: POSITION CHECK FAIL – "
-                f"{len(open_for_market)} open position(s) for {self._market_id}"
-            )
+            self._last_skip_reason = "มี position เปิดอยู่แล้ว"
             return
         logger.debug("OrderExecutorBot: POSITION CHECK PASS – no existing position")
 
@@ -524,14 +489,15 @@ class OrderExecutorBot:
             await asyncio.sleep(3)
             latest = self._bus.latest()
             if latest is None or latest.signal != sig.signal:
-                logger.debug(f"OrderExecutorBot: spike – signal flipped, aborting")
+                self._last_skip_reason = f"spike – signal เปลี่ยนใน 3s"
                 self._monitoring = False
                 return
             effective_threshold = settings.ENTRY_RANGE_LOWER + (0.05 if abs(latest.ema_trade_delta) > 0.2 else 0.0)
             if abs(latest.delta) < effective_threshold:
-                logger.debug(f"OrderExecutorBot: delta dropped after 3s – aborting")
+                self._last_skip_reason = f"delta ร่วงใน 3s ({abs(latest.delta):.4f}% < {effective_threshold:.3f}%)"
                 self._monitoring = False
                 return
+        self._last_skip_reason = None  # ผ่านทุก check แล้ว
         except Exception:
             self._monitoring = False
             raise
@@ -907,6 +873,8 @@ class OrderExecutorBot:
                     if latest:
                         sig_color = GREEN if latest.signal == "UP" else (RED if latest.signal == "DOWN" else YELLOW)
                         print(f"  Signal: {sig_color}{latest.signal}{RESET}  Δ={latest.delta:+.4f}%")
+                    if self._last_skip_reason:
+                        print(f"  {YELLOW}⚠ ข้าม: {self._last_skip_reason}{RESET}")
 
                 print(SEP)
 

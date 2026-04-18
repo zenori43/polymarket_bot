@@ -635,7 +635,7 @@ class OrderExecutorBot:
                         f"loss={loss_pct:.1f}% > {settings.STOP_LOSS_PERCENT}% "
                         f"(held {self._sl_duration_count} ticks)"
                     )
-                    await self.close_position(position, reason="stop_loss")
+                    await self.close_position(position, reason="stop_loss", exit_price=current_price)
                     return
                 else:
                     logger.debug(
@@ -677,21 +677,22 @@ class OrderExecutorBot:
                     f"OrderExecutorBot: TP_LOW reached ({pnl:.2%}) – "
                     f"closing position market={market_id}"
                 )
-                await self.close_position(position, reason="tp_low")
+                await self.close_position(position, reason="tp_low", exit_price=current_price)
                 return
 
     # ------------------------------------------------------------------
     # Close / panic helpers
     # ------------------------------------------------------------------
 
-    async def close_position(self, position: dict, reason: str) -> None:
+    async def close_position(self, position: dict, reason: str, exit_price: Optional[float] = None) -> None:
         """
         Close an open position using FOK Market Sell via market_sell_fok().
 
         Parameters
         ----------
-        position : original position dict (must contain size, market)
-        reason   : human-readable reason string for logging ("tp_low", "panic_sell", "stop_loss")
+        position   : original position dict (must contain size, market)
+        reason     : "tp_low", "panic_sell", "stop_loss"
+        exit_price : known price at close time (skips re-fetch if provided)
         """
         market_id = position.get("market", self._market_id)
         token_id = position.get("token_id") or position.get("market", self._market_id)
@@ -743,13 +744,15 @@ class OrderExecutorBot:
             else:
                 self._consecutive_panic_sells = 0
 
-            # Fetch current price for P&L calculation
-            try:
-                exit_price = await self._client.get_price(position.get("market", self._market_id))
-                if exit_price is None:
+            # ใช้ exit_price ที่ส่งมา ถ้าไม่มีให้ดึงจาก token โดยตรง
+            if exit_price is None:
+                try:
+                    token_id_ep = position.get("token_id")
+                    exit_price = await self._client.get_price_clob(token_id_ep) if token_id_ep else None
+                    if exit_price is None:
+                        exit_price = position.get("entry_price", 0.0)
+                except Exception:
                     exit_price = position.get("entry_price", 0.0)
-            except Exception:
-                exit_price = position.get("entry_price", 0.0)
 
             self._print_status(
                 position=position,

@@ -322,7 +322,12 @@ class OrderExecutorBot:
                         logger.debug("OrderExecutorBot: market expired – discovering next market")
                     discovered = await self._auto_discover_market()
                     if not discovered:
-                        logger.debug("OrderExecutorBot: รอตลาดใหม่ – ยังไม่มี market ที่ accept orders")
+                        # ล้าง token เก่าทิ้ง ไม่ให้ display แสดง CLOB ✗ ของตลาดเก่า
+                        self._yes_token_id = None
+                        self._no_token_id = None
+                        self._outcome_up = None
+                        self._outcome_down = None
+                        logger.info("OrderExecutorBot: รอตลาดใหม่ – retry ใน 30s")
                         await asyncio.sleep(30)
                     else:
                         await asyncio.sleep(1)
@@ -792,7 +797,12 @@ class OrderExecutorBot:
                 await asyncio.sleep(2)
 
                 if self._yes_token_id is None and self._no_token_id is None:
-                    continue  # ยังไม่มี market
+                    dry_tag = f" {YELLOW}[DRY RUN]{RESET}" if settings.DRY_RUN else ""
+                    print(SEP)
+                    print(f" {BOLD}ตลาด 5 นาที ครั้งที่ {self._market_round}{RESET}{dry_tag}  │  {self._state.get_summary()}")
+                    print(f" {YELLOW}⏳ รอตลาดใหม่...{RESET}")
+                    print(SEP)
+                    continue
 
                 # คำนวณ seconds remaining ก่อนดึงราคา
                 secs_remaining = 300

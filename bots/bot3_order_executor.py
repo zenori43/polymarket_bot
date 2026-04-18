@@ -386,16 +386,22 @@ class OrderExecutorBot:
             clob_fail_secs = now_ts - self._clob_unavailable_since
             if clob_fail_secs < 5.0:
                 return
-            # fallback 1: outcomePrices จาก market data (ไม่ต้องเรียก API เพิ่ม)
             fallback_price: Optional[float] = None
-            if self._outcome_up is not None:
+            # fallback 1: last trade price (most recent actual transaction)
+            token_for_signal = self._yes_token_id if sig.signal == "UP" else self._no_token_id
+            if token_for_signal:
+                fallback_price = await self._client.get_last_trade_price(token_for_signal)
+                if fallback_price is not None:
+                    logger.debug(f"OrderExecutorBot: using last_trade_price={fallback_price}")
+            # fallback 2: outcomePrices จาก market data
+            if fallback_price is None and self._outcome_up is not None:
                 fallback_price = self._outcome_up if sig.signal == "UP" else self._outcome_down
-                logger.debug(f"OrderExecutorBot: CLOB unavailable – using outcomePrices={fallback_price}")
-            # fallback 2: slug endpoint
+                logger.debug(f"OrderExecutorBot: using outcomePrices={fallback_price}")
+            # fallback 3: slug endpoint
             if fallback_price is None and self._market_slug:
                 fallback_price = await self._client.get_price_by_slug(self._market_slug)
                 if fallback_price is not None:
-                    logger.debug(f"OrderExecutorBot: CLOB unavailable – using slug price={fallback_price}")
+                    logger.debug(f"OrderExecutorBot: using slug price={fallback_price}")
             if fallback_price is not None:
                 clob_price = fallback_price
                 price = fallback_price
@@ -593,11 +599,13 @@ class OrderExecutorBot:
             tick += 1
 
             # ── Fetch current price ────────────────────────────────────
-            clob_price_mon: Optional[float] = await self._client.get_price_clob(market_id)
-            gamma_price_mon: Optional[float] = await self._client.get_price_gamma(market_id)
-            current_price = clob_price_mon if clob_price_mon is not None else gamma_price_mon
+            token_id_mon = position.get("token_id")
+            clob_price_mon: Optional[float] = await self._client.get_price_clob(token_id_mon or market_id)
+            last_trade_mon: Optional[float] = None
+            if clob_price_mon is None and token_id_mon:
+                last_trade_mon = await self._client.get_last_trade_price(token_id_mon)
+            current_price = clob_price_mon if clob_price_mon is not None else last_trade_mon
 
-            # CLOB unavailable = liquidity หมด = ราคาชนขอบ → ปล่อยรอหมดเวลา ไม่ TP
             clob_available = clob_price_mon is not None
 
             if not clob_available and current_price is not None:

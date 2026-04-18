@@ -105,6 +105,30 @@ class PolymarketClient:
             logger.debug(f"CLOB price unavailable for market_id={market_id}: {exc}")
             return None
 
+    async def get_last_trade_price(self, token_id: str) -> Optional[float]:
+        """
+        GET https://clob.polymarket.com/last-trade-price?token_id=...
+        Returns last traded price as float, or None on error.
+        Default 0.5 (no trades) is returned as None.
+        """
+        url = f"{settings.CLOB_URL}/last-trade-price"
+        try:
+            client = await self._get_client()
+            resp = await client.get(url, params={"token_id": token_id}, timeout=httpx.Timeout(3.0))
+            resp.raise_for_status()
+            data = resp.json()
+            price_str = data.get("price")
+            if price_str is None:
+                return None
+            price = float(price_str)
+            if price == 0.5 and not data.get("side"):
+                return None  # default = ยังไม่มีการเทรด
+            logger.debug(f"last_trade_price token={token_id[:12]}… price={price} side={data.get('side')}")
+            return price
+        except Exception as exc:
+            logger.debug(f"get_last_trade_price error: {exc}")
+            return None
+
     async def get_price_by_slug(self, slug: str) -> Optional[float]:
         """
         Fallback price via Gamma slug endpoint when CLOB is unavailable.

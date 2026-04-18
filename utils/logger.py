@@ -37,18 +37,15 @@ _logger.add(
     diagnose=True,
 )
 
-# File sink
+# File sink — no rotation (avoids loguru Linux ctime bug)
 _logger.add(
     _LOG_FILE,
     format=_LOG_FORMAT,
     level="DEBUG",
-    rotation="10 MB",
-    retention="7 days",
-    compression="zip",
+    mode="a",
     backtrace=True,
     diagnose=True,
     encoding="utf-8",
-    delay=True,
     catch=True,
 )
 

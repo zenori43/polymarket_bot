@@ -359,18 +359,18 @@ class PolymarketClient:
 
     async def find_active_btc_markets(self, limit: int = 50) -> list[dict]:
         """
-        ค้นหา BTC 5-min Up/Down markets
-        filter: question มี 'up or down' + 'bitcoin'/'btc', acceptingOrders=True
-        และ endDate อยู่ภายใน 10 นาทีข้างหน้า (5-min round)
+        ค้นหา BTC 5-min Up/Down markets ที่ยังไม่ปิด (closed=false)
+        และ endDate อยู่ภายใน 30 นาทีข้างหน้า
         """
-        import json as _json
         from datetime import datetime, timezone, timedelta
         url = f"{settings.GAMMA_URL}/markets"
         now_utc = datetime.now(timezone.utc)
         cutoff = now_utc + timedelta(minutes=30)
         params = {
-            "active": "true", "limit": limit,
-            "order": "endDate", "ascending": "true",
+            "closed": "false",
+            "limit": limit,
+            "order": "endDate",
+            "ascending": "true",
             "end_date_min": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "end_date_max": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
@@ -379,15 +379,15 @@ class PolymarketClient:
             resp = await client.get(url, params=params, timeout=httpx.Timeout(5.0))
             resp.raise_for_status()
             markets: list[dict] = resp.json()
+            if not isinstance(markets, list):
+                logger.warning(f"find_active_btc_markets: unexpected response type: {type(markets)}")
+                return []
             filtered = []
             for m in markets:
                 q = m.get("question", "").lower()
-                # ต้องมีคำว่า up/down และ btc/bitcoin
                 if not (("up" in q and "down" in q) and ("btc" in q or "bitcoin" in q)):
                     continue
-                if not m.get("acceptingOrders", False):
-                    continue
-                # ต้องหมดภายใน 10 นาที
+                # acceptingOrders อาจยัง False ตอนตลาดเพิ่งเริ่ม → อนุญาต
                 end_str = m.get("endDate", "")
                 try:
                     end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))

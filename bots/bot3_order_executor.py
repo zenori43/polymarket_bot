@@ -178,13 +178,6 @@ class OrderExecutorBot:
             logger.warning("_auto_discover_market: no 5-min markets found, trying all markets")
 
         for market in candidates:
-            if not market.get("acceptingOrders", False):
-                logger.debug(
-                    f"OrderExecutorBot: _auto_discover_market – skipping market "
-                    f"id={market.get('id')} (acceptingOrders=False)"
-                )
-                continue
-
             token_ids = self._client.extract_token_ids(market)
             if token_ids is None:
                 logger.debug(

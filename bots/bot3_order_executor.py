@@ -144,7 +144,7 @@ class OrderExecutorBot:
         set self._market_id, self._yes_token_id, self._no_token_id, self._market_end_date
         return True ถ้าสำเร็จ, False ถ้าไม่เจอ
         """
-        logger.info("OrderExecutorBot: _auto_discover_market – searching for active BTC markets")
+        logger.debug("OrderExecutorBot: _auto_discover_market – searching for active BTC markets")
         try:
             markets = await self._client.find_active_btc_markets(limit=20)
         except Exception as exc:
@@ -200,12 +200,18 @@ class OrderExecutorBot:
             self._market_end_date = market.get("endDate")
             if is_new:
                 self._market_round += 1
-            logger.info(
-                f"OrderExecutorBot: _auto_discover_market SUCCESS – "
-                f"ตลาด 5 นาที ครั้งที่ {self._market_round} "
-                f"market_id={self._market_id} "
-                f"endDate={self._market_end_date}"
-            )
+            if is_new:
+                logger.info(
+                    f"OrderExecutorBot: _auto_discover_market SUCCESS – "
+                    f"ตลาด 5 นาที ครั้งที่ {self._market_round} "
+                    f"market_id={self._market_id} "
+                    f"endDate={self._market_end_date}"
+                )
+            else:
+                logger.debug(
+                    f"OrderExecutorBot: same market rediscovered – "
+                    f"market_id={self._market_id} endDate={self._market_end_date}"
+                )
             return True
 
         logger.warning("OrderExecutorBot: _auto_discover_market – no suitable market found after scanning all candidates")
@@ -300,7 +306,10 @@ class OrderExecutorBot:
             try:
                 # Check if current market has expired or token IDs are missing
                 if self._yes_token_id is None or self._no_token_id is None or self._is_market_expired():
-                    logger.info("OrderExecutorBot: market expired or not set – discovering new market")
+                    if self._yes_token_id is None or self._no_token_id is None:
+                        logger.info("OrderExecutorBot: token IDs not set – discovering market")
+                    else:
+                        logger.debug("OrderExecutorBot: market expired – discovering next market")
                     discovered = await self._auto_discover_market()
                     if not discovered:
                         await asyncio.sleep(30)

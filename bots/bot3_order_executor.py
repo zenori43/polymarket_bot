@@ -193,10 +193,13 @@ class OrderExecutorBot:
                 continue
 
             # Found a usable market
-            self._market_id = str(market["id"])
+            new_market_id = str(market["id"])
+            is_new = new_market_id != self._market_id
+            self._market_id = new_market_id
             self._yes_token_id, self._no_token_id = token_ids
             self._market_end_date = market.get("endDate")
-            self._market_round += 1
+            if is_new:
+                self._market_round += 1
             logger.info(
                 f"OrderExecutorBot: _auto_discover_market SUCCESS – "
                 f"ตลาด 5 นาที ครั้งที่ {self._market_round} "
@@ -301,7 +304,9 @@ class OrderExecutorBot:
                     discovered = await self._auto_discover_market()
                     if not discovered:
                         await asyncio.sleep(30)
-                        continue
+                    else:
+                        await asyncio.sleep(1)
+                    continue
 
                 sig: DeltaSignal = await self._bus.subscribe()
                 asyncio.create_task(self._handle_signal(sig))

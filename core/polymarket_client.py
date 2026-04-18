@@ -340,8 +340,13 @@ class PolymarketClient:
         from datetime import datetime, timezone, timedelta
         url = f"{settings.GAMMA_URL}/markets"
         now_utc = datetime.now(timezone.utc)
-        cutoff = now_utc + timedelta(minutes=10)
-        params = {"active": "true", "limit": limit, "order": "endDate", "ascending": "true"}
+        cutoff = now_utc + timedelta(minutes=30)
+        params = {
+            "active": "true", "limit": limit,
+            "order": "endDate", "ascending": "true",
+            "end_date_min": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end_date_max": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
         try:
             client = await self._get_client()
             resp = await client.get(url, params=params, timeout=httpx.Timeout(5.0))

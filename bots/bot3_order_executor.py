@@ -817,7 +817,7 @@ class OrderExecutorBot:
         """
         while True:
             try:
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)
 
                 if self._yes_token_id is None and self._no_token_id is None:
                     continue  # ยังไม่มี market

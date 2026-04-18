@@ -763,6 +763,9 @@ class OrderExecutorBot:
         if result.get("error"):
             logger.error(f"OrderExecutorBot: close_position failed: {result['error']}")
         else:
+            if reason == "panic_sell":
+                dry_tag = " [DRY RUN]" if settings.DRY_RUN else ""
+                print(f"\n{RED}{BOLD}⚡ PANIC SELL executed{RESET}{YELLOW}{dry_tag}{RESET}  market={market_id}\n")
             logger.info(f"OrderExecutorBot: close_position FOK accepted reason={reason}")
 
             # Task A5: Panic sell cooldown

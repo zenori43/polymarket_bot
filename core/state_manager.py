@@ -62,6 +62,7 @@ class StateManager:
             "total_trades": 0,
             "wins": 0,
             "losses": 0,
+            "panic_sells": 0,
             "total_pnl": 0.0,
         },
     }
@@ -151,12 +152,16 @@ class StateManager:
         self._state["open_position"] = None
 
         stats = self._state["stats"]
-        stats["total_trades"] += 1
         stats["total_pnl"] = round(stats["total_pnl"] + pnl_abs, 4)
-        if pnl_abs >= 0:
-            stats["wins"] += 1
+        if reason == "panic_sell":
+            stats.setdefault("panic_sells", 0)
+            stats["panic_sells"] += 1
         else:
-            stats["losses"] += 1
+            stats["total_trades"] += 1
+            if pnl_abs >= 0:
+                stats["wins"] += 1
+            else:
+                stats["losses"] += 1
 
         self._save()
         logger.info(
@@ -172,9 +177,11 @@ class StateManager:
         total = s["total_trades"]
         wins = s["wins"]
         losses = s["losses"]
+        panics = s.get("panic_sells", 0)
         pnl = s["total_pnl"]
         wr = (wins / total * 100) if total > 0 else 0.0
+        panic_str = f" Panic={panics}" if panics > 0 else ""
         return (
-            f"Trades={total} W={wins} L={losses} "
+            f"Trades={total} W={wins} L={losses}{panic_str} "
             f"WR={wr:.1f}% TotalPnL={pnl:+.4f} USDC"
         )

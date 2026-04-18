@@ -134,11 +134,14 @@ class PolymarketClient:
         Fallback price via Gamma slug endpoint when CLOB is unavailable.
         Returns mid = (bestBid + bestAsk) / 2, or lastTradePrice.
         GET https://gamma-api.polymarket.com/markets/slug/{slug}
+        Uses cache-busting params to avoid Vercel stale cache.
         """
+        import random as _random
         url = f"{settings.GAMMA_URL}/markets/slug/{slug}"
+        params = {"t": int(time.time()), "r": _random.randint(1000, 9999)}
         try:
             client = await self._get_client()
-            resp = await client.get(url, timeout=httpx.Timeout(5.0))
+            resp = await client.get(url, params=params, timeout=httpx.Timeout(5.0))
             resp.raise_for_status()
             data = resp.json()
             best_bid = data.get("bestBid")
@@ -390,6 +393,7 @@ class PolymarketClient:
         url = f"{settings.GAMMA_URL}/markets"
         now_utc = datetime.now(timezone.utc)
         cutoff = now_utc + timedelta(minutes=30)
+        import random as _random
         params = {
             "closed": "false",
             "limit": limit,
@@ -397,6 +401,8 @@ class PolymarketClient:
             "ascending": "true",
             "end_date_min": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "end_date_max": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "_t": int(now_utc.timestamp()),
+            "_r": _random.randint(1000, 9999),
         }
         try:
             client = await self._get_client()

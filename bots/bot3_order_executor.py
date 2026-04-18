@@ -896,20 +896,22 @@ class OrderExecutorBot:
                 print(f" {BOLD}ตลาด 5 นาที ครั้งที่ {self._market_round}{RESET}{dry_tag}  │  {stats}")
                 print(f" {CYAN}🕐 {now_str}{RESET}  {gate_str}  +{elapsed}s{countdown}{order_str}")
 
-                if price is not None:
-                    yes_p = clob_p if clob_p is not None else gamma_p
-                    no_p = round(1 - yes_p, 3) if yes_p is not None else None
-                    clob_str = f"${clob_p:.3f}" if clob_p is not None else f"{RED}unavailable{RESET}"
-                    gamma_str = f"${gamma_p:.3f}" if gamma_p is not None else f"{RED}unavailable{RESET}"
-                    print(f"  CLOB: {clob_str}   Gamma: {gamma_str}")
-                    if yes_p and no_p:
-                        print(f"  Up: ${yes_p:.3f}  │  Down: ${no_p:.3f}")
+                yes_p = clob_p if clob_p is not None else gamma_p
+                no_p = round(1 - yes_p, 3) if yes_p is not None else None
+                if yes_p and no_p:
+                    print(f"  Up: ${yes_p:.3f}  │  Down: ${no_p:.3f}")
 
-                # Gate 2 status indicator
-                if clob_p is None:
-                    print(f"  {RED}[G2✗] CLOB unavailable{RESET}")
-                elif gamma_p is not None and not (0.60 <= gamma_p <= 0.90):
-                    print(f"  {RED}[G2✗] Gamma ${gamma_p:.3f} นอก [0.60–0.90]{RESET}")
+                # Gate 2 status
+                clob_ok = clob_p is not None
+                gamma_ok = gamma_p is not None and (0.60 <= gamma_p <= 0.90)
+                clob_status = f"{GREEN}CLOB ✓{RESET}" if clob_ok else f"{RED}CLOB ✗{RESET}"
+                if gamma_p is None:
+                    gamma_status = f"{YELLOW}Gamma ?{RESET}"
+                elif gamma_ok:
+                    gamma_status = f"{GREEN}Gamma ✓ ${gamma_p:.3f}{RESET}"
+                else:
+                    gamma_status = f"{RED}Gamma ✗ ${gamma_p:.3f} (ต้อง 0.60–0.90){RESET}"
+                print(f"  {clob_status}  {gamma_status}")
 
                 # แสดง position ถ้ามี
                 pos = self._state.open_position

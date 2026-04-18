@@ -905,6 +905,12 @@ class OrderExecutorBot:
                     if yes_p and no_p:
                         print(f"  Up: ${yes_p:.3f}  │  Down: ${no_p:.3f}")
 
+                # Gate 2 status indicator
+                if clob_p is None:
+                    print(f"  {RED}[G2✗] CLOB unavailable{RESET}")
+                elif gamma_p is not None and not (0.60 <= gamma_p <= 0.90):
+                    print(f"  {RED}[G2✗] Gamma ${gamma_p:.3f} นอก [0.60–0.90]{RESET}")
+
                 # แสดง position ถ้ามี
                 pos = self._state.open_position
                 if callable(pos):

@@ -248,6 +248,7 @@ class DeltaSignalBot:
             sig = DeltaSignal(
                 signal=signal_str,
                 delta=price_delta_pct,   # ส่ง price_delta_pct เป็น delta (หน่วย %)
+                ema_trade_delta=self._ema_trade_delta,
                 timestamp=int(now_ts),
                 invert=invert,
             )

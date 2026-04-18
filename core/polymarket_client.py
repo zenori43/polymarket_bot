@@ -409,3 +409,85 @@ class PolymarketClient:
         except Exception as exc:
             logger.error(f"claim_reward error for conditionId={condition_id}: {exc}")
             return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Polygon blockchain helpers
+    # ------------------------------------------------------------------
+
+    async def get_usdc_balance_polygon(self, wallet: str) -> float:
+        """ดึง USDC balance จาก Polygon blockchain โดยตรง (ไม่ผ่าน Data API)"""
+        try:
+            addr = wallet.lower().replace("0x", "").zfill(64)
+            data = f"0x70a08231{addr}"
+            payload = {
+                "jsonrpc": "2.0", "method": "eth_call",
+                "params": [{"to": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "data": data}, "latest"],
+                "id": 1,
+            }
+            client = await self._get_client()
+            resp = await client.post(settings.RPC, json=payload, timeout=httpx.Timeout(5.0))
+            resp.raise_for_status()
+            result = resp.json().get("result") or "0x0"
+            return int(result, 16) / 1_000_000.0
+        except Exception as exc:
+            logger.warning(f"get_usdc_balance_polygon error for {wallet}: {exc}")
+            return 0.0
+
+    async def get_position_shares_polygon(self, wallet: str, token_id: str) -> float:
+        """ดึงจำนวน shares ของ position จาก Polygon CTF contract โดยตรง"""
+        try:
+            addr = wallet.lower().replace("0x", "").zfill(64)
+            tid = hex(int(token_id)).replace("0x", "").zfill(64)
+            data = f"0x00fdd58e{addr}{tid}"
+            payload = {
+                "jsonrpc": "2.0", "method": "eth_call",
+                "params": [{"to": "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045", "data": data}, "latest"],
+                "id": 1,
+            }
+            client = await self._get_client()
+            resp = await client.post(settings.RPC, json=payload, timeout=httpx.Timeout(5.0))
+            resp.raise_for_status()
+            result = resp.json().get("result") or "0x0"
+            return int(result, 16) / 1_000_000.0
+        except Exception as exc:
+            logger.warning(f"get_position_shares_polygon error for {wallet} token={token_id}: {exc}")
+            return 0.0
+
+    async def run_claim_cycle(self, wallet: str, wallet_obj: object) -> int:
+        """
+        Claim ทุก resolved position สำหรับ wallet นี้
+        return จำนวน position ที่ claim สำเร็จ
+        """
+        claimed = 0
+        try:
+            claimable = await self.get_resolved_claimable(wallet)
+            if not claimable:
+                logger.info("run_claim_cycle: nothing to claim")
+                return 0
+            for position in claimable:
+                condition_id = position.get("condition_id") or position.get("conditionId", "")
+                amount = int(float(position.get("size", 0)))
+                if not condition_id or amount == 0:
+                    continue
+                try:
+                    signed_tx = wallet_obj.sign_redeem(condition_id, amount)
+                    result = await self.claim_reward(condition_id, signed_tx)
+                    if not result.get("error"):
+                        claimed += 1
+                        logger.info(f"run_claim_cycle: claimed conditionId={condition_id}")
+                except Exception as exc:
+                    logger.error(f"run_claim_cycle: failed conditionId={condition_id}: {exc}")
+        except Exception as exc:
+            logger.error(f"run_claim_cycle error: {exc}")
+        return claimed
+
+    async def market_buy_opposite(self, opposite_token_id: str, price: float, size: float) -> dict:
+        """ซื้อ token ฝั่งตรงข้ามเพื่อ synthetic close เมื่อถือ shares < 5"""
+        order_args = {
+            "token_id": opposite_token_id,
+            "price":    price,
+            "size":     size,
+            "side":     "BUY",
+        }
+        logger.info(f"market_buy_opposite: buying opposite token={opposite_token_id} size={size}")
+        return await self.submit_order(order_args)

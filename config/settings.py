@@ -96,3 +96,12 @@ BTC_MARKET_ID: str = os.getenv("BTC_MARKET_ID", "BTC_UP_DOWN_PLACEHOLDER")
 # ---------------------------------------------------------------------------
 DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 STATE_FILE: str = os.getenv("STATE_FILE", "state.json")
+
+# ---------------------------------------------------------------------------
+# Email alert
+# ---------------------------------------------------------------------------
+EMAIL_FROM: str = os.getenv("EMAIL_FROM", "")
+EMAIL_TO: str = os.getenv("EMAIL_TO", "")
+EMAIL_SMTP_HOST: str = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
+EMAIL_SMTP_PORT: int = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")

@@ -25,9 +25,9 @@ STATS_INTERVAL        = 50
 TRADE_WINDOW_SECONDS  = 5      # sliding window width for trade aggregation
 
 EMA_ALPHA: float     = 0.02    # smoothing factor for trade pressure EMA
-EMA_THRESHOLD: float = 0.05    # ±0.05 threshold for trade signal UP/DOWN
+EMA_THRESHOLD: float = 0.03    # ±0.03 threshold for trade signal UP/DOWN
 
-PRICE_DELTA_THRESHOLD = 0.05   # % threshold for price-delta signal (±0.05 %)
+PRICE_DELTA_THRESHOLD = 0.03   # % threshold for price-delta signal (±0.03 %)
 
 # 5-minute window gate boundaries (seconds elapsed within the window)
 TIME_GATE_MIN = 30

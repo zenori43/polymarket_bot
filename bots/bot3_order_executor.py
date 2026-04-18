@@ -98,6 +98,38 @@ class OrderExecutorBot:
         self._yes_token_id: str | None = None
         self._no_token_id: str | None = None
         self._market_end_date: str | None = None  # ISO 8601 string
+        # Task A5: Panic sell cooldown tracking
+        self._consecutive_panic_sells: int = 0
+        self.PANIC_COOLDOWN_TRADES = 3  # stop after 3 consecutive
+
+    def _send_panic_email(self) -> None:
+        """Send a panic alert email using settings."""
+        import smtplib
+        from email.mime.text import MIMEText
+
+        from_email = settings.EMAIL_FROM
+        to_email = settings.EMAIL_TO
+        smtp_host = settings.EMAIL_SMTP_HOST
+        smtp_port = settings.EMAIL_SMTP_PORT
+        password = settings.EMAIL_PASSWORD
+
+        if not all([from_email, to_email, smtp_host, password]):
+            logger.warning("OrderExecutorBot: email settings incomplete, skipping panic email")
+            return
+
+        try:
+            msg = MIMEText(f"Bot paused after 3 consecutive panic sells at {datetime.now()}")
+            msg["Subject"] = "[PolyBot] Panic sell triggered 3 times"
+            msg["From"] = from_email
+            msg["To"] = to_email
+
+            with smtplib.SMTP(smtp_host, int(smtp_port)) as server:
+                server.starttls()
+                server.login(from_email, password)
+                server.send_message(msg)
+            logger.info("OrderExecutorBot: panic email sent successfully")
+        except Exception as exc:
+            logger.warning(f"OrderExecutorBot: failed to send panic email: {exc}")
 
     # ------------------------------------------------------------------
     # Market info refresh
@@ -321,18 +353,17 @@ class OrderExecutorBot:
         clob_price: Optional[float] = await self._client.get_price_clob(self._market_id)
         gamma_price: Optional[float] = await self._client.get_price_gamma(self._market_id)
 
-        # ใช้ CLOB ก่อน fallback Gamma
-        price = clob_price if clob_price is not None else gamma_price
-        clob_ok = clob_price is not None
+        # CLOB ต้องมีก่อน ถึงจะเข้า order — Gamma ใช้แค่แสดงผล
+        price = clob_price
 
-        if price is None:
-            logger.warning("OrderExecutorBot: GATE 2 FAIL – price unavailable")
+        if clob_price is None:
+            logger.warning("OrderExecutorBot: GATE 2 FAIL – CLOB price unavailable (no entry)")
             self._print_status(
                 clob_price=clob_price,
                 gamma_price=gamma_price,
                 gate_results=[
                     (True,  _gate1_msg),
-                    (False, "Gate 2: price unavailable"),
+                    (False, "Gate 2: CLOB unavailable"),
                 ],
             )
             return
@@ -349,7 +380,21 @@ class OrderExecutorBot:
                 ],
             )
             return
-        logger.debug(f"OrderExecutorBot: GATE 2 PASS – price={price} clob_ok={clob_ok}")
+        # ราคา Gamma ต้องอยู่ใน [0.60, 0.90] ไม่เช่นนั้น upside จำกัดหรือ over-priced
+        if gamma_price is not None and not (0.60 <= gamma_price <= 0.90):
+            logger.warning(
+                f"OrderExecutorBot: GATE 2 FAIL – Gamma price={gamma_price:.3f} out of range [0.60, 0.90]"
+            )
+            self._print_status(
+                clob_price=clob_price,
+                gamma_price=gamma_price,
+                gate_results=[
+                    (True,  _gate1_msg),
+                    (False, f"Gate 2: Gamma=${gamma_price:.3f} out of [0.60, 0.90]"),
+                ],
+            )
+            return
+        logger.debug(f"OrderExecutorBot: GATE 2 PASS – price={price} clob_ok=True")
         _gate2_msg = f"Gate 2: price=${price:.3f} (ok)"
 
         # Derive up/down prices from the raw market price and signal direction
@@ -371,11 +416,21 @@ class OrderExecutorBot:
                 ],
             )
             return
+
+        # Task A3: Dynamic delta threshold
+        effective_entry_threshold = settings.ENTRY_RANGE_LOWER
+        if abs(sig.ema_trade_delta) > 0.2:
+            effective_entry_threshold += 0.05
+            logger.info(
+                f"OrderExecutorBot: high volume detected (ema_trade_delta={sig.ema_trade_delta:.4f}), "
+                f"bumping threshold to {effective_entry_threshold:.3f}"
+            )
+
         abs_delta = abs(sig.delta)
-        if abs_delta < settings.ENTRY_RANGE_LOWER:
+        if abs_delta < effective_entry_threshold:
             logger.debug(
                 f"OrderExecutorBot: GATE 3 FAIL – |Δ%|={abs_delta:.4f}% "
-                f"< ENTRY_RANGE_LOWER={settings.ENTRY_RANGE_LOWER}%"
+                f"< effective_entry_threshold={effective_entry_threshold}%"
             )
             self._print_status(
                 clob_price=clob_price,
@@ -383,7 +438,7 @@ class OrderExecutorBot:
                 gate_results=[
                     (True,  _gate1_msg),
                     (True,  _gate2_msg),
-                    (False, f"Gate 3: |Δ%|={abs_delta:.4f}% < {settings.ENTRY_RANGE_LOWER}%"),
+                    (False, f"Gate 3: |Δ%|={abs_delta:.4f}% < {effective_entry_threshold}%"),
                 ],
             )
             return
@@ -401,6 +456,22 @@ class OrderExecutorBot:
                 (True, f"Gate 3: signal={sig.signal} |Δ%|={abs_delta:.4f}%"),
             ],
         )
+
+        # ── CHECK: USDC Cash Balance ──────────────────────────────────
+        usdc_balance = await self._client.get_usdc_balance_polygon(settings.WALLET_ADDRESS)
+        if usdc_balance < 5.0:
+            logger.warning(
+                f"OrderExecutorBot: CASH CHECK FAIL – balance=${usdc_balance:.2f} < $5 "
+                f"– attempting claim first"
+            )
+            claimed = await self._client.run_claim_cycle(settings.WALLET_ADDRESS, self._wallet)
+            if claimed > 0:
+                usdc_balance = await self._client.get_usdc_balance_polygon(settings.WALLET_ADDRESS)
+                logger.info(f"OrderExecutorBot: after claim balance=${usdc_balance:.2f}")
+            if usdc_balance < 5.0:
+                logger.warning(f"OrderExecutorBot: balance still ${usdc_balance:.2f} after claim – skipping trade")
+                return
+            logger.info(f"OrderExecutorBot: balance restored to ${usdc_balance:.2f} – proceeding")
 
         # ── CHECK: Existing Position ──────────────────────────────────
         if self._monitoring:
@@ -444,6 +515,25 @@ class OrderExecutorBot:
             f"OrderExecutorBot: submitting order signal={sig.signal} "
             f"token_id={token_id} entry_price={entry_price} size={_DEFAULT_ORDER_SIZE_USDC}"
         )
+
+        # รอ 3 วิ แล้ว re-confirm ว่า delta ยังเกิน threshold (กัน spike)
+        logger.info("OrderExecutorBot: waiting 3s to confirm delta is not a spike...")
+        await asyncio.sleep(3)
+        latest = self._bus.latest()
+        if latest is None or latest.signal != sig.signal:
+            logger.info(
+                f"OrderExecutorBot: delta spike detected after 3s – aborting order "
+                f"(signal flipped to {latest.signal if latest else 'None'})"
+            )
+            return
+        effective_threshold = settings.ENTRY_RANGE_LOWER + (0.05 if abs(latest.ema_trade_delta) > 0.2 else 0.0)
+        if abs(latest.delta) < effective_threshold:
+            logger.info(
+                f"OrderExecutorBot: delta dropped below threshold after 3s "
+                f"({abs(latest.delta):.4f}% < {effective_threshold:.4f}%) – aborting"
+            )
+            return
+        logger.info(f"OrderExecutorBot: delta confirmed after 3s – proceeding with order")
 
         try:
             result = await self._client.submit_order(order_args)
@@ -578,12 +668,27 @@ class OrderExecutorBot:
             # ── Invert Panic Sell (delta signal) ──────────────────────
             latest = self._bus.latest()
             if latest is not None and latest.invert:
-                logger.warning(
-                    f"OrderExecutorBot: INVERT DETECTED – panic sell "
-                    f"market={market_id}"
-                )
-                await self.close_position(position, reason="panic_sell")
-                return
+                # Task A6: Panic sell time/volume gate
+                seconds_remaining = 999
+                if self._market_end_date:
+                    try:
+                        end_dt = datetime.fromisoformat(self._market_end_date.replace("Z", "+00:00"))
+                        seconds_remaining = (end_dt - datetime.now(timezone.utc)).total_seconds()
+                    except Exception:
+                        pass
+
+                if seconds_remaining <= 15 or abs(latest.ema_trade_delta) > 0.2:
+                    logger.warning(
+                        f"OrderExecutorBot: INVERT DETECTED – panic sell "
+                        f"market={market_id} (rem={seconds_remaining:.0f}s, ema={latest.ema_trade_delta:.4f})"
+                    )
+                    await self.close_position(position, reason="panic_sell")
+                    return
+                else:
+                    logger.debug(
+                        f"OrderExecutorBot: INVERT suppressed (gate not met: rem={seconds_remaining:.0f}s, "
+                        f"ema={latest.ema_trade_delta:.4f})"
+                    )
 
             # ── Take Profit ────────────────────────────────────────────
             if pnl >= settings.TP_LOW:
@@ -610,15 +715,49 @@ class OrderExecutorBot:
         market_id = position.get("market", self._market_id)
         token_id = position.get("token_id") or position.get("market", self._market_id)
         size = float(position.get("size", _DEFAULT_ORDER_SIZE_USDC))
+        signal = position.get("signal", "UP")
+
+        # ดึง shares จริงจาก Polygon (แทน state ที่อาจไม่ตรง)
+        actual_shares = await self._client.get_position_shares_polygon(settings.WALLET_ADDRESS, token_id)
         logger.info(
             f"OrderExecutorBot: close_position reason={reason} market={market_id} "
-            f"token_id={token_id} size={size}"
+            f"token_id={token_id} size={size} actual_shares={actual_shares:.4f}"
         )
-        result = await self._client.market_sell_fok(token_id=token_id, size=size)
+
+        if actual_shares < 5.0 and actual_shares > 0:
+            # shares น้อยเกินไป ขายฝั่งตรงข้ามแทน (synthetic close)
+            opposite_token = self._no_token_id if signal == "UP" else self._yes_token_id
+            if opposite_token:
+                logger.info(
+                    f"OrderExecutorBot: shares={actual_shares:.4f} < 5 – buying opposite token={opposite_token}"
+                )
+                clob_p = await self._client.get_price_clob(opposite_token)
+                opp_price = clob_p if clob_p is not None else 0.99
+                result = await self._client.market_buy_opposite(opposite_token, opp_price, size)
+            else:
+                logger.warning("OrderExecutorBot: no opposite token available, trying FOK anyway")
+                result = await self._client.market_sell_fok(token_id=token_id, size=size)
+        else:
+            result = await self._client.market_sell_fok(token_id=token_id, size=size)
+
         if result.get("error"):
-            logger.error(f"OrderExecutorBot: close_position FOK failed: {result['error']}")
+            logger.error(f"OrderExecutorBot: close_position failed: {result['error']}")
         else:
             logger.info(f"OrderExecutorBot: close_position FOK accepted reason={reason}")
+
+            # Task A5: Panic sell cooldown
+            if reason == 'panic_sell':
+                self._consecutive_panic_sells += 1
+                if self._consecutive_panic_sells >= self.PANIC_COOLDOWN_TRADES:
+                    logger.warning(
+                        f"OrderExecutorBot: {self.PANIC_COOLDOWN_TRADES} consecutive panic sells! "
+                        "Pausing bot and sending email alert."
+                    )
+                    self._send_panic_email()
+                    self._consecutive_panic_sells = 0
+                    raise asyncio.CancelledError("Bot paused due to consecutive panic sells")
+            else:
+                self._consecutive_panic_sells = 0
 
             # Fetch current price for P&L calculation
             try:

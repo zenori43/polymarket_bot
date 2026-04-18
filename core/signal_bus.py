@@ -25,11 +25,13 @@ class DeltaSignal:
     ----------
     signal    : "UP" | "DOWN" | "NEUTRAL"
     delta     : float in [-1, 1] – (bid_weight - ask_weight) / (bid_weight + ask_weight)
+    ema_trade_delta : float representing the smoothed trade-flow imbalance
     timestamp : unix timestamp (seconds) when the signal was produced
     invert    : True if a confirmed signal inversion was detected this tick
     """
     signal: str            # "UP" | "DOWN" | "NEUTRAL"
     delta: float
+    ema_trade_delta: float = 0.0
     timestamp: int = field(default_factory=lambda: int(time.time()))
     invert: bool = False
 

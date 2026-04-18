@@ -99,6 +99,8 @@ class OrderExecutorBot:
         self._no_token_id: str | None = None
         self._market_end_date: str | None = None  # ISO 8601 string
         self._market_slug: str | None = None
+        self._outcome_up: float | None = None   # Up (YES) price จาก outcomePrices
+        self._outcome_down: float | None = None  # Down (NO) price จาก outcomePrices
         # Task A5: Panic sell cooldown tracking
         self._consecutive_panic_sells: int = 0
         self.PANIC_COOLDOWN_TRADES = 3  # stop after 3 consecutive
@@ -193,6 +195,18 @@ class OrderExecutorBot:
             self._yes_token_id, self._no_token_id = token_ids
             self._market_end_date = market.get("endDate")
             self._market_slug = market.get("slug")
+            # parse outcomePrices: "[\"0.09\", \"0.92\"]" → up=0.09, down=0.92
+            try:
+                import json as _json
+                op = market.get("outcomePrices")
+                if op:
+                    prices = _json.loads(op) if isinstance(op, str) else op
+                    self._outcome_up = float(prices[0])
+                    self._outcome_down = float(prices[1])
+                else:
+                    self._outcome_up = self._outcome_down = None
+            except Exception:
+                self._outcome_up = self._outcome_down = None
             if is_new:
                 self._market_round += 1
             if is_new:
@@ -372,14 +386,19 @@ class OrderExecutorBot:
             clob_fail_secs = now_ts - self._clob_unavailable_since
             if clob_fail_secs < 5.0:
                 return
-            # fallback: ลองดึงราคาจาก slug endpoint
-            slug_price: Optional[float] = None
-            if self._market_slug:
-                slug_price = await self._client.get_price_by_slug(self._market_slug)
-            if slug_price is not None:
-                logger.debug(f"OrderExecutorBot: CLOB unavailable – using slug price={slug_price}")
-                clob_price = slug_price
-                price = slug_price
+            # fallback 1: outcomePrices จาก market data (ไม่ต้องเรียก API เพิ่ม)
+            fallback_price: Optional[float] = None
+            if self._outcome_up is not None:
+                fallback_price = self._outcome_up if sig.signal == "UP" else self._outcome_down
+                logger.debug(f"OrderExecutorBot: CLOB unavailable – using outcomePrices={fallback_price}")
+            # fallback 2: slug endpoint
+            if fallback_price is None and self._market_slug:
+                fallback_price = await self._client.get_price_by_slug(self._market_slug)
+                if fallback_price is not None:
+                    logger.debug(f"OrderExecutorBot: CLOB unavailable – using slug price={fallback_price}")
+            if fallback_price is not None:
+                clob_price = fallback_price
+                price = fallback_price
             else:
                 logger.debug(
                     f"OrderExecutorBot: GATE 2 FAIL – CLOB+slug unavailable for {clob_fail_secs:.1f}s"
@@ -807,8 +826,11 @@ class OrderExecutorBot:
                 token = self._yes_token_id or self._market_id
                 clob_p = await self._client.get_price_clob(token) if secs_remaining > 10 else None
                 slug_p = None
-                if clob_p is None and self._market_slug and secs_remaining > 10:
-                    slug_p = await self._client.get_price_by_slug(self._market_slug)
+                if clob_p is None and secs_remaining > 10:
+                    if self._outcome_up is not None:
+                        slug_p = self._outcome_up  # outcomePrices fallback (no API call)
+                    elif self._market_slug:
+                        slug_p = await self._client.get_price_by_slug(self._market_slug)
                 price = clob_p if clob_p is not None else slug_p
 
                 # คำนวณ elapsed
@@ -849,16 +871,18 @@ class OrderExecutorBot:
                 print(f" {BOLD}ตลาด 5 นาที ครั้งที่ {self._market_round}{RESET}{dry_tag}  │  {stats}")
                 print(f" {CYAN}🕐 {now_str}{RESET}  {gate_str}  +{elapsed}s{countdown}{order_str}")
 
-                yes_p = clob_p if clob_p is not None else slug_p
-                no_p = round(1 - yes_p, 3) if yes_p is not None else None
-                if yes_p and no_p:
-                    print(f"  Up: ${yes_p:.3f}  │  Down: ${no_p:.3f}")
+                # Up/Down display — ใช้ CLOB ก่อน ถ้าไม่มีใช้ outcomePrices
+                up_display = clob_p if clob_p is not None else self._outcome_up
+                down_display = (round(1 - clob_p, 3) if clob_p is not None
+                                else self._outcome_down)
+                if up_display is not None and down_display is not None:
+                    print(f"  Up: ${up_display:.3f}  │  Down: ${down_display:.3f}")
                 if clob_p is not None:
                     print(f"  {GREEN}CLOB ✓{RESET}")
-                elif slug_p is not None:
-                    print(f"  {YELLOW}CLOB ✗  Slug ✓ ${slug_p:.3f}{RESET}")
+                elif self._outcome_up is not None:
+                    print(f"  {YELLOW}CLOB ✗  Gamma: Up=${self._outcome_up:.3f} Down=${self._outcome_down:.3f}{RESET}")
                 else:
-                    print(f"  {RED}CLOB ✗  Slug ✗{RESET}")
+                    print(f"  {RED}CLOB ✗{RESET}")
 
                 # แสดง position ถ้ามี
                 pos = self._state.open_position

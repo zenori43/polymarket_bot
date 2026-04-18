@@ -497,7 +497,7 @@ class OrderExecutorBot:
                 self._last_skip_reason = f"delta ร่วงใน 3s ({abs(latest.delta):.4f}% < {effective_threshold:.3f}%)"
                 self._monitoring = False
                 return
-        self._last_skip_reason = None  # ผ่านทุก check แล้ว
+            self._last_skip_reason = None  # ผ่านทุก check แล้ว
         except Exception:
             self._monitoring = False
             raise

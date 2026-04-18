@@ -120,33 +120,31 @@ class PolymarketClient:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
-            # data may be a list or a single dict depending on the endpoint version
             market = data[0] if isinstance(data, list) and data else data
-            # Try common field names used by the Gamma API
+            if not isinstance(market, dict):
+                logger.debug(f"Gamma price unexpected format for {market_id}: {type(market)}")
+                return None
+            import json as _json
             for key in ("bestAsk", "bestBid", "price", "outcomePrices"):
                 val = market.get(key)
-                if val is not None:
-                    # outcomePrices is sometimes a JSON string like '["0.52","0.48"]'
+                if val is None:
+                    continue
+                try:
                     if isinstance(val, str):
-                        try:
-                            import json
-                            parsed = json.loads(val)
-                            if isinstance(parsed, list) and parsed:
-                                price = float(parsed[0])
-                            else:
-                                price = float(val)
-                        except (ValueError, TypeError):
-                            price = float(val)
+                        parsed = _json.loads(val)
+                        price = float(parsed[0]) if isinstance(parsed, list) and parsed else float(val)
                     elif isinstance(val, list) and val:
                         price = float(val[0])
                     else:
                         price = float(val)
                     logger.debug(f"Gamma price for {market_id}: {price}")
                     return price
-            logger.warning(f"Gamma price response has no known price field for {market_id}: {market}")
+                except (ValueError, TypeError):
+                    continue
+            logger.debug(f"Gamma price no known field for {market_id}")
             return None
         except Exception as exc:
-            logger.error(f"Gamma price fetch error for market_id={market_id}: {exc}")
+            logger.debug(f"Gamma price unavailable for market_id={market_id}: {exc}")
             return None
 
     async def get_price(self, market_id: str) -> Optional[float]:

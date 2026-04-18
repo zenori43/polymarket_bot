@@ -102,6 +102,7 @@ class OrderExecutorBot:
         self._consecutive_panic_sells: int = 0
         self.PANIC_COOLDOWN_TRADES = 3  # stop after 3 consecutive
         self._market_round: int = 0  # นับตลาดที่ผ่านมา
+        self._last_order_signal: str | None = None  # UP/DOWN ของ order ล่าสุด
         self._clob_unavailable_since: float | None = None  # timestamp เมื่อ CLOB เริ่ม fail
 
     def _send_panic_email(self) -> None:
@@ -558,6 +559,7 @@ class OrderExecutorBot:
             logger.error(f"OrderExecutorBot: order REJECTED: {result['error']}")
             return
 
+        self._last_order_signal = sig.signal
         logger.info(f"OrderExecutorBot: order ACCEPTED – response={result}")
 
         # Build a minimal position dict for the monitor loop
@@ -786,6 +788,7 @@ class OrderExecutorBot:
                 reason=reason,
             )
 
+            self._last_order_signal = None
             trade = self._state.close_position(exit_price=exit_price, reason=reason)
             if trade is not None:
                 logger.info(
@@ -823,10 +826,19 @@ class OrderExecutorBot:
                 if self._yes_token_id is None and self._no_token_id is None:
                     continue  # ยังไม่มี market
 
-                # ดึงราคา
+                # คำนวณ seconds remaining ก่อนดึงราคา
+                secs_remaining = 300
+                if self._market_end_date:
+                    try:
+                        end_dt = datetime.fromisoformat(self._market_end_date.replace("Z", "+00:00"))
+                        secs_remaining = max(0, int((end_dt - datetime.now(timezone.utc)).total_seconds()))
+                    except Exception:
+                        pass
+
+                # หยุดดึงราคาช่วง 10 วิท้าย (ตลาดใกล้ปิด)
                 token = self._yes_token_id or self._market_id
-                clob_p = await self._client.get_price_clob(token)
-                gamma_p = await self._client.get_price_gamma(self._market_id)
+                clob_p = await self._client.get_price_clob(token) if secs_remaining > 10 else None
+                gamma_p = await self._client.get_price_gamma(self._market_id) if secs_remaining > 10 else None
                 price = clob_p if clob_p is not None else gamma_p
 
                 # คำนวณ elapsed
@@ -853,9 +865,19 @@ class OrderExecutorBot:
                 now_str = datetime.now().strftime("%H:%M:%S")
                 stats = self._state.get_summary()
 
+                # order status
+                if self._last_order_signal == "UP":
+                    order_str = f"  {GREEN}▲ ORDER: UP{RESET}"
+                elif self._last_order_signal == "DOWN":
+                    order_str = f"  {RED}▼ ORDER: DOWN{RESET}"
+                else:
+                    order_str = f"  {YELLOW}รอ signal{RESET}"
+
+                dry_tag = f" {YELLOW}[DRY RUN]{RESET}" if settings.DRY_RUN else ""
+
                 print(SEP)
-                print(f" {BOLD}ตลาด 5 นาที ครั้งที่ {self._market_round}{RESET}  │  {stats}")
-                print(f" {CYAN}🕐 {now_str}{RESET}  {gate_str}  +{elapsed}s{countdown}")
+                print(f" {BOLD}ตลาด 5 นาที ครั้งที่ {self._market_round}{RESET}{dry_tag}  │  {stats}")
+                print(f" {CYAN}🕐 {now_str}{RESET}  {gate_str}  +{elapsed}s{countdown}{order_str}")
 
                 if price is not None:
                     yes_p = clob_p if clob_p is not None else gamma_p

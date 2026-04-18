@@ -105,6 +105,30 @@ class PolymarketClient:
             logger.debug(f"CLOB price unavailable for market_id={market_id}: {exc}")
             return None
 
+    async def get_price_by_slug(self, slug: str) -> Optional[float]:
+        """
+        Fallback price via Gamma slug endpoint when CLOB is unavailable.
+        Returns mid = (bestBid + bestAsk) / 2, or lastTradePrice.
+        GET https://gamma-api.polymarket.com/markets/slug/{slug}
+        """
+        url = f"{settings.GAMMA_URL}/markets/slug/{slug}"
+        try:
+            client = await self._get_client()
+            resp = await client.get(url, timeout=httpx.Timeout(5.0))
+            resp.raise_for_status()
+            data = resp.json()
+            best_bid = data.get("bestBid")
+            best_ask = data.get("bestAsk")
+            if best_bid is not None and best_ask is not None:
+                return round((float(best_bid) + float(best_ask)) / 2, 4)
+            last = data.get("lastTradePrice")
+            if last is not None:
+                return float(last)
+            return None
+        except Exception as exc:
+            logger.debug(f"get_price_by_slug failed slug={slug}: {exc}")
+            return None
+
     async def get_price_gamma(self, market_id: str) -> Optional[float]:
         """
         Fetch price from the Gamma API as a fallback.

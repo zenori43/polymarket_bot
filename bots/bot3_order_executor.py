@@ -98,6 +98,7 @@ class OrderExecutorBot:
         self._yes_token_id: str | None = None
         self._no_token_id: str | None = None
         self._market_end_date: str | None = None  # ISO 8601 string
+        self._market_slug: str | None = None
         # Task A5: Panic sell cooldown tracking
         self._consecutive_panic_sells: int = 0
         self.PANIC_COOLDOWN_TRADES = 3  # stop after 3 consecutive
@@ -198,6 +199,7 @@ class OrderExecutorBot:
             self._market_id = new_market_id
             self._yes_token_id, self._no_token_id = token_ids
             self._market_end_date = market.get("endDate")
+            self._market_slug = market.get("slug")
             if is_new:
                 self._market_round += 1
             if is_new:
@@ -377,17 +379,26 @@ class OrderExecutorBot:
             clob_fail_secs = now_ts - self._clob_unavailable_since
             if clob_fail_secs < 5.0:
                 return
-            logger.debug(
-                f"OrderExecutorBot: GATE 2 FAIL – CLOB unavailable for {clob_fail_secs:.1f}s"
-            )
-            self._print_status(
-                clob_price=clob_price,
-                gate_results=[
-                    (True,  _gate1_msg),
-                    (False, "Gate 2: CLOB unavailable"),
-                ],
-            )
-            return
+            # fallback: ลองดึงราคาจาก slug endpoint
+            slug_price: Optional[float] = None
+            if self._market_slug:
+                slug_price = await self._client.get_price_by_slug(self._market_slug)
+            if slug_price is not None:
+                logger.debug(f"OrderExecutorBot: CLOB unavailable – using slug price={slug_price}")
+                clob_price = slug_price
+                price = slug_price
+            else:
+                logger.debug(
+                    f"OrderExecutorBot: GATE 2 FAIL – CLOB+slug unavailable for {clob_fail_secs:.1f}s"
+                )
+                self._print_status(
+                    clob_price=None,
+                    gate_results=[
+                        (True,  _gate1_msg),
+                        (False, "Gate 2: ไม่มีราคา (CLOB+slug unavailable)"),
+                    ],
+                )
+                return
         if price in settings.PRICE_FORBIDDEN:
             logger.warning(
                 f"OrderExecutorBot: GATE 2 FAIL – price={price} is in PRICE_FORBIDDEN"
@@ -835,8 +846,10 @@ class OrderExecutorBot:
                 # หยุดดึงราคาช่วง 10 วิท้าย (ตลาดใกล้ปิด)
                 token = self._yes_token_id or self._market_id
                 clob_p = await self._client.get_price_clob(token) if secs_remaining > 10 else None
-                gamma_p = None
-                price = clob_p
+                slug_p = None
+                if clob_p is None and self._market_slug and secs_remaining > 10:
+                    slug_p = await self._client.get_price_by_slug(self._market_slug)
+                price = clob_p if clob_p is not None else slug_p
 
                 # คำนวณ elapsed
                 elapsed = _seconds_in_current_5min_window()
@@ -876,12 +889,16 @@ class OrderExecutorBot:
                 print(f" {BOLD}ตลาด 5 นาที ครั้งที่ {self._market_round}{RESET}{dry_tag}  │  {stats}")
                 print(f" {CYAN}🕐 {now_str}{RESET}  {gate_str}  +{elapsed}s{countdown}{order_str}")
 
-                yes_p = clob_p
+                yes_p = clob_p if clob_p is not None else slug_p
                 no_p = round(1 - yes_p, 3) if yes_p is not None else None
                 if yes_p and no_p:
                     print(f"  Up: ${yes_p:.3f}  │  Down: ${no_p:.3f}")
-                clob_status = f"{GREEN}CLOB ✓{RESET}" if clob_p is not None else f"{RED}CLOB ✗{RESET}"
-                print(f"  {clob_status}")
+                if clob_p is not None:
+                    print(f"  {GREEN}CLOB ✓{RESET}")
+                elif slug_p is not None:
+                    print(f"  {YELLOW}CLOB ✗  Slug ✓ ${slug_p:.3f}{RESET}")
+                else:
+                    print(f"  {RED}CLOB ✗  Slug ✗{RESET}")
 
                 # แสดง position ถ้ามี
                 pos = self._state.open_position

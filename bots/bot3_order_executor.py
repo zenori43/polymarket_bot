@@ -211,8 +211,13 @@ class OrderExecutorBot:
             if is_new:
                 self._market_round += 1
             if is_new:
-                if settings.DRY_RUN:
-                    self._state.reset_stats()
+                # ล้าง order/position เก่าจากตลาดที่แล้ว
+                self._last_order_signal = None
+                self._monitoring = False
+                self._sl_duration_count = 0
+                if settings.DRY_RUN and self._state.open_position:
+                    self._state._state["open_position"] = None
+                    self._state._save()
                 logger.info(
                     f"OrderExecutorBot: _auto_discover_market SUCCESS – "
                     f"ตลาด 5 นาที ครั้งที่ {self._market_round} "

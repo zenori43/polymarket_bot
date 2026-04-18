@@ -415,13 +415,13 @@ class PolymarketClient:
     # ------------------------------------------------------------------
 
     async def get_usdc_balance_polygon(self, wallet: str) -> float:
-        """ดึง USDC balance จาก Polygon blockchain โดยตรง (ไม่ผ่าน Data API)"""
+        """ดึง USDC.e balance จาก Polygon blockchain (Polymarket ใช้ USDC.e)"""
         try:
             addr = wallet.lower().replace("0x", "").zfill(64)
             data = f"0x70a08231{addr}"
             payload = {
                 "jsonrpc": "2.0", "method": "eth_call",
-                "params": [{"to": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "data": data}, "latest"],
+                "params": [{"to": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174", "data": data}, "latest"],
                 "id": 1,
             }
             client = await self._get_client()

@@ -458,7 +458,8 @@ class OrderExecutorBot:
         )
 
         # ── CHECK: USDC Cash Balance ──────────────────────────────────
-        usdc_balance = await self._client.get_usdc_balance_polygon(settings.WALLET_ADDRESS)
+        cash_wallet = settings.FUNDER or settings.WALLET_ADDRESS
+        usdc_balance = await self._client.get_usdc_balance_polygon(cash_wallet)
         if usdc_balance < 5.0:
             logger.warning(
                 f"OrderExecutorBot: CASH CHECK FAIL – balance=${usdc_balance:.2f} < $5 "
@@ -466,7 +467,7 @@ class OrderExecutorBot:
             )
             claimed = await self._client.run_claim_cycle(settings.WALLET_ADDRESS, self._wallet)
             if claimed > 0:
-                usdc_balance = await self._client.get_usdc_balance_polygon(settings.WALLET_ADDRESS)
+                usdc_balance = await self._client.get_usdc_balance_polygon(cash_wallet)
                 logger.info(f"OrderExecutorBot: after claim balance=${usdc_balance:.2f}")
             if usdc_balance < 5.0:
                 logger.warning(f"OrderExecutorBot: balance still ${usdc_balance:.2f} after claim – skipping trade")

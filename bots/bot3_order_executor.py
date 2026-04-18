@@ -211,6 +211,8 @@ class OrderExecutorBot:
             if is_new:
                 self._market_round += 1
             if is_new:
+                if settings.DRY_RUN:
+                    self._state.reset_stats()
                 logger.info(
                     f"OrderExecutorBot: _auto_discover_market SUCCESS – "
                     f"ตลาด 5 นาที ครั้งที่ {self._market_round} "
@@ -425,6 +427,9 @@ class OrderExecutorBot:
         # ปรับราคาตาม signal — ถ้า DOWN ใช้ราคา NO token = 1 - YES
         if sig.signal == "DOWN":
             price = round(1 - price, 4)
+        if price > 0.90:
+            self._last_skip_reason = f"ราคา ${price:.3f} แพงเกินไป (> $0.90)"
+            return
         _gate2_msg = f"Gate 2: price=${price:.3f} (ok)"
 
         # ── GATE 3: Delta Gate ────────────────────────────────────────

@@ -171,6 +171,18 @@ class StateManager:
         )
         return trade
 
+    def reset_stats(self) -> None:
+        """Reset trade stats and trade history (for dry run per-round reset)."""
+        self._state["trades"] = []
+        self._state["stats"] = {
+            "total_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "panic_sells": 0,
+            "total_pnl": 0.0,
+        }
+        self._save()
+
     def get_summary(self) -> str:
         """Return a human-readable P&L summary string."""
         s = self._state["stats"]

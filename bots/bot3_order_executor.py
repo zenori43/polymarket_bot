@@ -101,6 +101,7 @@ class OrderExecutorBot:
         # Task A5: Panic sell cooldown tracking
         self._consecutive_panic_sells: int = 0
         self.PANIC_COOLDOWN_TRADES = 3  # stop after 3 consecutive
+        self._clob_unavailable_since: float | None = None  # timestamp เมื่อ CLOB เริ่ม fail
 
     def _send_panic_email(self) -> None:
         """Send a panic alert email using settings."""
@@ -357,13 +358,22 @@ class OrderExecutorBot:
         price = clob_price
 
         if clob_price is None:
-            logger.warning("OrderExecutorBot: GATE 2 FAIL – CLOB price unavailable (no entry)")
+            now_ts = time.time()
+            if self._clob_unavailable_since is None:
+                self._clob_unavailable_since = now_ts
+            clob_fail_secs = now_ts - self._clob_unavailable_since
+            if clob_fail_secs < 5.0:
+                # ยังไม่ถึง 5 วิ — รอก่อน ไม่ log
+                return
+            logger.warning(
+                f"OrderExecutorBot: GATE 2 FAIL – CLOB unavailable for {clob_fail_secs:.1f}s"
+            )
             self._print_status(
                 clob_price=clob_price,
                 gamma_price=gamma_price,
                 gate_results=[
                     (True,  _gate1_msg),
-                    (False, "Gate 2: CLOB unavailable"),
+                    (False, f"Gate 2: CLOB unavailable ({clob_fail_secs:.0f}s)"),
                 ],
             )
             return
@@ -394,6 +404,7 @@ class OrderExecutorBot:
                 ],
             )
             return
+        self._clob_unavailable_since = None  # reset เมื่อ CLOB กลับมา
         logger.debug(f"OrderExecutorBot: GATE 2 PASS – price={price} clob_ok=True")
         _gate2_msg = f"Gate 2: price=${price:.3f} (ok)"
 

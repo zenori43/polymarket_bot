@@ -547,6 +547,7 @@ class OrderExecutorBot:
             await self.monitor_loop(position)
         finally:
             self._monitoring = False
+            self._last_skip_reason = None
 
     # ------------------------------------------------------------------
     # Monitor loop

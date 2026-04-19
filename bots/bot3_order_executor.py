@@ -610,11 +610,9 @@ class OrderExecutorBot:
                     self._monitoring = False
                     return
 
-            # re-fetch ราคาล่าสุดหลัง wait — ใช้ราคาที่ถูกต้อง ณ เวลาส่ง order
+            # re-fetch ราคาล่าสุดหลัง wait — token_id เป็น YES หรือ NO อยู่แล้ว ไม่ต้อง invert
             fresh_price = await self._client.get_price_clob(token_id)
             if fresh_price is not None:
-                if sig.signal == "DOWN":
-                    fresh_price = round(1 - fresh_price, 4)
                 if (fresh_price < settings.MIN_ENTRY_PRICE
                         or (settings.TP_PRICE_CAP - fresh_price) / fresh_price < settings.MIN_TP_GAIN):
                     self._last_skip_reason = f"ราคาหลัง wait ไม่เหมาะ ${fresh_price:.3f}"

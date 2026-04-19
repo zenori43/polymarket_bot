@@ -159,11 +159,12 @@ class PolymarketClient:
 
     async def get_price_gamma(self, market_id: str) -> Optional[float]:
         """
-        Fetch price from the Gamma API as a fallback.
+        Fetch YES-token mid price from Gamma API as a fallback.
+
+        Priority: outcomePrices[0] → (bestBid+bestAsk)/2 → lastTradePrice
+        outcomePrices matches what Polymarket website displays.
 
         GET https://gamma-api.polymarket.com/markets?id={market_id}
-
-        Returns None on any error.
         """
         url = f"{settings.GAMMA_URL}/markets"
         params = {"id": market_id}
@@ -177,22 +178,38 @@ class PolymarketClient:
                 logger.debug(f"Gamma price unexpected format for {market_id}: {type(market)}")
                 return None
             import json as _json
-            for key in ("bestAsk", "bestBid", "price", "outcomePrices"):
-                val = market.get(key)
-                if val is None:
-                    continue
+
+            # 1st priority: outcomePrices[0] = YES/UP token price (matches Polymarket UI)
+            op = market.get("outcomePrices")
+            if op is not None:
                 try:
-                    if isinstance(val, str):
-                        parsed = _json.loads(val)
-                        price = float(parsed[0]) if isinstance(parsed, list) and parsed else float(val)
-                    elif isinstance(val, list) and val:
-                        price = float(val[0])
-                    else:
-                        price = float(val)
-                    logger.debug(f"Gamma price for {market_id}: {price}")
-                    return price
+                    prices = _json.loads(op) if isinstance(op, str) else op
+                    if isinstance(prices, list) and prices:
+                        price = float(prices[0])
+                        logger.debug(f"Gamma outcomePrices[0] for {market_id}: {price}")
+                        return price
+                except (ValueError, TypeError, Exception):
+                    pass
+
+            # 2nd priority: mid of bestBid and bestAsk
+            bid = market.get("bestBid")
+            ask = market.get("bestAsk")
+            if bid is not None and ask is not None:
+                try:
+                    mid = (float(bid) + float(ask)) / 2
+                    logger.debug(f"Gamma bid/ask mid for {market_id}: {mid}")
+                    return round(mid, 4)
                 except (ValueError, TypeError):
-                    continue
+                    pass
+
+            # 3rd priority: lastTradePrice
+            last = market.get("lastTradePrice")
+            if last is not None:
+                try:
+                    return float(last)
+                except (ValueError, TypeError):
+                    pass
+
             logger.debug(f"Gamma price no known field for {market_id}")
             return None
         except Exception as exc:

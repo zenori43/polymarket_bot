@@ -296,5 +296,89 @@ async def main() -> None:
         print(f"  {'Down':15s}  {fmt(g_down):>8}  {fmt(clob_down):>8}")
 
 
+async def loop(interval: float = 5.0) -> None:
+    """ดึงราคาซ้ำทุก interval วินาที จนกด Ctrl+C"""
+    from datetime import datetime, timezone
+
+    yes_token = no_token = None
+    market_end: str = ""
+
+    async with httpx.AsyncClient() as client:
+        print(f"Loop mode — refresh ทุก {interval:.0f}s  (Ctrl+C เพื่อหยุด)\n")
+
+        while True:
+            now_str = datetime.now().strftime("%H:%M:%S")
+
+            # ── re-discover ถ้าตลาดหมดหรือยังไม่มี token ─────────────
+            need_discover = yes_token is None
+            if market_end:
+                try:
+                    end_dt = datetime.fromisoformat(market_end.replace("Z", "+00:00"))
+                    if datetime.now(timezone.utc) >= end_dt:
+                        need_discover = True
+                        yes_token = no_token = None
+                except Exception:
+                    pass
+
+            if need_discover:
+                print(f"[{now_str}] ค้นหาตลาด …")
+                market = await gamma_find_active_5min(client)
+                if market is None:
+                    print(f"[{now_str}] ไม่พบตลาด รอ 10s …\n")
+                    await asyncio.sleep(10)
+                    continue
+                yes_token, no_token = extract_tokens(market)
+                market_end = market.get("endDate", "")
+                print(f"[{now_str}] {market.get('question','?')}")
+                print(f"          end={market_end}  YES={yes_token[:16] if yes_token else 'N/A'}…\n")
+
+            # ── ดึงราคาพร้อมกัน: Gamma (re-fetch fresh) + CLOB ────────
+            try:
+                t0 = time.perf_counter()
+                gamma_task = gamma_find_active_5min(client)  # fresh outcomePrices
+                clob_task  = clob_get_prices(client, yes_token, no_token)
+                fresh_market, c = await asyncio.gather(gamma_task, clob_task, return_exceptions=True)
+                ms = (time.perf_counter() - t0) * 1000
+
+                # Gamma prices
+                g_up = g_down = None
+                if isinstance(fresh_market, dict):
+                    g = await gamma_get_prices(client, "", fresh_market)
+                    g_up, g_down = g.get("up"), g.get("down")
+
+                # CLOB midpoints
+                clob_yes_mid = clob_no_mid = None
+                if isinstance(c, dict):
+                    clob_yes_mid = c.get("yes_mid")
+                    clob_no_mid  = c.get("no_mid")
+
+                print(
+                    f"[{now_str}]  "
+                    f"Gamma  Up={fmt(g_up)}  Dn={fmt(g_down)}  │  "
+                    f"CLOB   Up={fmt(clob_yes_mid)}  Dn={fmt(clob_no_mid)}  "
+                    f"({ms:.0f}ms)"
+                )
+
+            except Exception as exc:
+                print(f"[{now_str}] ERROR: {repr(exc)}")
+
+            await asyncio.sleep(interval)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("args", nargs="*")
+    parser.add_argument("--loop", "-l", nargs="?", const=5.0, type=float, metavar="SEC",
+                        help="loop mode, refresh every N seconds (default 5)")
+    parsed = parser.parse_args()
+
+    if parsed.loop is not None:
+        try:
+            asyncio.run(loop(parsed.loop))
+        except KeyboardInterrupt:
+            print("\nหยุด")
+    else:
+        # ส่ง positional args กลับไปให้ main เดิม
+        sys.argv = [sys.argv[0]] + (parsed.args or [])
+        asyncio.run(main())

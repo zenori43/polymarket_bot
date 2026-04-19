@@ -332,6 +332,24 @@ class OrderExecutorBot:
             logger.info(f"OrderExecutorBot: restoring market_id from state: {self._state.market_id}")
             self._market_id = self._state.market_id
 
+        # ── Wallet status display ────────────────────────────────────
+        print(SEP)
+        mode_str = f"{YELLOW}[DRY RUN]{RESET}" if settings.DRY_RUN else f"{GREEN}[LIVE]{RESET}"
+        print(f" {BOLD}Polymarket Bot{RESET}  {mode_str}")
+        print(f" {CYAN}Proxy Wallet :{RESET} {settings.WALLET_ADDRESS}")
+        print(f" {CYAN}Funder       :{RESET} {settings.FUNDER or settings.WALLET_ADDRESS}")
+        if not settings.DRY_RUN:
+            try:
+                funder = settings.FUNDER or settings.WALLET_ADDRESS
+                usdc = await self._client.get_usdc_balance_polygon(funder)
+                bal_color = GREEN if usdc >= 5.0 else RED
+                print(f" {CYAN}USDC Balance :{RESET} {bal_color}${usdc:.2f}{RESET}")
+            except Exception as exc:
+                print(f" {CYAN}USDC Balance :{RESET} {RED}ดึงไม่ได้ ({exc}){RESET}")
+        else:
+            print(f" {CYAN}USDC Balance :{RESET} {YELLOW}DRY RUN – ไม่ดึงยอดจริง{RESET}")
+        print(SEP)
+
         if settings.DRY_RUN:
             logger.info("=" * 50)
             logger.info("[DRY RUN MODE] No real orders will be placed")

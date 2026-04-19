@@ -438,23 +438,22 @@ class PolymarketClient:
 
     async def find_active_btc_markets(self, limit: int = 50) -> list[dict]:
         """
-        ค้นหา BTC 5-min Up/Down markets ที่ยังไม่ปิด (closed=false)
-        และ endDate อยู่ภายใน 30 นาทีข้างหน้า
+        ค้นหา BTC Up/Down markets ที่ยังไม่ปิด (closed=false)
+        กรองเฉพาะ question ที่มี up/down + btc/bitcoin
+        ไม่ filter end_date เพราะ Gamma API ไม่รองรับ param นั้นจริง
         """
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timezone
+        import random as _random
         url = f"{settings.GAMMA_URL}/markets"
         now_utc = datetime.now(timezone.utc)
-        cutoff = now_utc + timedelta(minutes=30)
-        import random as _random
         params = {
-            "closed": "false",
-            "limit": limit,
-            "order": "endDate",
+            "closed":    "false",
+            "active":    "true",
+            "limit":     limit,
+            "order":     "endDate",
             "ascending": "true",
-            "end_date_min": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "end_date_max": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "_t": int(now_utc.timestamp()),
-            "_r": _random.randint(1000, 9999),
+            "_t":        int(now_utc.timestamp()),
+            "_r":        _random.randint(1000, 9999),
         }
         try:
             client = await self._get_client()
@@ -469,19 +468,18 @@ class PolymarketClient:
                 q = m.get("question", "").lower()
                 if not (("up" in q and "down" in q) and ("btc" in q or "bitcoin" in q)):
                     continue
-                # acceptingOrders อาจยัง False ตอนตลาดเพิ่งเริ่ม → อนุญาต
                 end_str = m.get("endDate", "")
                 try:
                     end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
-                    if not (now_utc < end_dt <= cutoff):
-                        continue
+                    if end_dt <= now_utc:
+                        continue  # ปิดไปแล้ว
                 except Exception:
                     continue
                 filtered.append(m)
-            logger.debug(f"find_active_btc_markets: found {len(filtered)} BTC 5-min markets")
+            logger.debug(f"find_active_btc_markets: found {len(filtered)} BTC markets")
             return filtered
         except Exception as exc:
-            logger.error(f"find_active_btc_markets error: {exc}")
+            logger.error(f"find_active_btc_markets error: {repr(exc)}")
             return []
 
     def extract_token_ids(self, market: dict) -> tuple[str, str] | None:

@@ -543,13 +543,12 @@ class OrderExecutorBot:
 
         # ── CHECK: USDC Cash Balance (skip in dry run) ───────────────
         if not settings.DRY_RUN:
-            cash_wallet = settings.FUNDER or settings.WALLET_ADDRESS
-            usdc_balance = await self._client.get_usdc_balance_polygon(cash_wallet)
+            usdc_balance = await self._client.get_usdc_balance_polygon(settings.WALLET_ADDRESS)
             if usdc_balance < 5.0:
                 logger.warning(f"OrderExecutorBot: CASH CHECK FAIL – balance=${usdc_balance:.2f} – attempting claim")
                 claimed = await self._client.run_claim_cycle(settings.WALLET_ADDRESS, self._wallet)
                 if claimed > 0:
-                    usdc_balance = await self._client.get_usdc_balance_polygon(cash_wallet)
+                    usdc_balance = await self._client.get_usdc_balance_polygon(settings.WALLET_ADDRESS)
                 if usdc_balance < 5.0:
                     self._last_skip_reason = f"เงินไม่พอ ${usdc_balance:.2f} (< $5)"
                     return

@@ -36,6 +36,8 @@ class PolymarketClient:
         self._clob = clob_client   # py-clob-client instance (optional)
         self._http = httpx.AsyncClient(timeout=settings.CLOB_TIMEOUT_MS / 1000)
         self._client: Optional[httpx.AsyncClient] = None
+        # CLOB price cache: token_id → (price, timestamp) — TTL 2s to avoid hammering
+        self._clob_cache: dict[str, tuple[Optional[float], float]] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -69,14 +71,21 @@ class PolymarketClient:
     async def get_price_clob(self, market_id: str) -> Optional[float]:
         """
         Fetch midpoint price from CLOB API via POST /midpoints.
+        Results are cached for 2s to prevent hammering when many signals arrive simultaneously.
 
         POST https://clob.polymarket.com/midpoints
         Body: [{"token_id": "<token_id>"}]
         Response: {"<token_id>": "0.72"}
-
-        Returns None on timeout or any error.
         """
+        # Return cached result if fresh (< 2s old)
+        cached = self._clob_cache.get(market_id)
+        if cached is not None:
+            price, ts = cached
+            if time.time() - ts < 2.0:
+                return price
+
         url = f"{settings.CLOB_URL}/midpoints"
+        price: Optional[float] = None
         try:
             client = await self._get_client()
             resp = await client.post(
@@ -87,24 +96,23 @@ class PolymarketClient:
             resp.raise_for_status()
             data = resp.json()
             price_str = data.get(market_id)
-            if price_str is None:
-                logger.warning(f"CLOB midpoints response missing token for {market_id[:16]}…: {data}")
-                return None
-            price = float(price_str)
-            logger.debug(f"CLOB midpoint for {market_id[:16]}…: {price}")
-            return price
+            if price_str is not None:
+                price = float(price_str)
+                logger.debug(f"CLOB midpoint for {market_id[:16]}…: {price}")
+            else:
+                logger.debug(f"CLOB midpoints: token not in response for {market_id[:16]}… data={data}")
         except httpx.TimeoutException:
-            logger.warning(f"CLOB midpoints timeout (3s) for market_id={market_id[:16]}…")
-            return None
+            logger.debug(f"CLOB midpoints timeout for market_id={market_id[:16]}…")
         except httpx.HTTPStatusError as exc:
-            logger.warning(
-                f"CLOB midpoints HTTP {exc.response.status_code} for market_id={market_id[:16]}… "
-                f"body={exc.response.text[:200]}"
+            logger.debug(
+                f"CLOB midpoints HTTP {exc.response.status_code} for {market_id[:16]}… "
+                f"body={exc.response.text[:120]}"
             )
-            return None
         except Exception as exc:
-            logger.warning(f"CLOB midpoints error for market_id={market_id[:16]}…: {type(exc).__name__}: {exc}")
-            return None
+            logger.debug(f"CLOB midpoints error for {market_id[:16]}…: {type(exc).__name__}: {exc}")
+
+        self._clob_cache[market_id] = (price, time.time())
+        return price
 
     async def get_last_trade_price(self, token_id: str) -> Optional[float]:
         """

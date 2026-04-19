@@ -426,6 +426,8 @@ class OrderExecutorBot:
             return
         else:
             self._clob_unavailable_since = None
+            if self._last_skip_reason == "CLOB ✗ – ไม่เทรด":
+                self._last_skip_reason = None
         if price in settings.PRICE_FORBIDDEN:
             self._last_skip_reason = f"ราคา ${price:.3f} ห้ามเข้า"
             return

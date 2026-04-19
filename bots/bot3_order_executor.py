@@ -340,10 +340,9 @@ class OrderExecutorBot:
         print(f" {CYAN}Funder       :{RESET} {settings.FUNDER or settings.WALLET_ADDRESS}")
         if not settings.DRY_RUN:
             try:
-                funder = settings.FUNDER or settings.WALLET_ADDRESS
-                usdc = await self._client.get_usdc_balance_polygon(funder)
+                usdc = await self._client.get_usdc_balance_polygon(settings.WALLET_ADDRESS)
                 bal_color = GREEN if usdc >= 5.0 else RED
-                print(f" {CYAN}USDC Balance :{RESET} {bal_color}${usdc:.2f}{RESET}")
+                print(f" {CYAN}USDC Balance :{RESET} {bal_color}${usdc:.2f}{RESET}  (Proxy)")
             except Exception as exc:
                 print(f" {CYAN}USDC Balance :{RESET} {RED}ดึงไม่ได้ ({exc}){RESET}")
         else:

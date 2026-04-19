@@ -187,6 +187,11 @@ class OrderExecutorBot:
             return False
 
         for market in candidates:
+            # เฉพาะ 5-min market — question ต้องมีรูปแบบ "H:MMam-H:MMam" ห่างกัน 5 นาที
+            if not self._is_5min_market(market):
+                logger.debug(f"_auto_discover_market: skip non-5min {market.get('question','')[:50]}")
+                continue
+
             token_ids = self._client.extract_token_ids(market)
             if token_ids is None:
                 logger.debug(
@@ -364,6 +369,17 @@ class OrderExecutorBot:
                         await asyncio.sleep(1)
                     continue
 
+                # re-discover ถ้า CLOB ✗ ต่อเนื่องนาน > 30s
+                if (
+                    self._clob_unavailable_since is not None
+                    and not self._monitoring
+                    and (time.time() - self._clob_unavailable_since) > 30
+                ):
+                    logger.info("OrderExecutorBot: CLOB ✗ > 30s – re-discovering market")
+                    self._clob_unavailable_since = None
+                    await self._auto_discover_market()
+                    continue
+
                 sig: DeltaSignal = await self._bus.subscribe()
                 asyncio.create_task(self._handle_signal(sig))
             except asyncio.CancelledError:
@@ -375,6 +391,25 @@ class OrderExecutorBot:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_5min_market(market: dict) -> bool:
+        """ตรวจว่าเป็น 5-min market จาก question เช่น '6:55AM-7:00AM ET'"""
+        import re
+        q = market.get("question", "")
+        m = re.search(r'(\d+):(\d+)(AM|PM)-(\d+):(\d+)(AM|PM)', q, re.IGNORECASE)
+        if not m:
+            return False
+        h1, m1, p1, h2, m2, p2 = m.groups()
+        h1, m1, h2, m2 = int(h1), int(m1), int(h2), int(m2)
+        if p1.upper() == "PM" and h1 != 12:
+            h1 += 12
+        if p2.upper() == "PM" and h2 != 12:
+            h2 += 12
+        diff = (h2 * 60 + m2) - (h1 * 60 + m1)
+        if diff < 0:
+            diff += 24 * 60
+        return diff == 5
 
     def _dynamic_delta_threshold(self, sig: DeltaSignal) -> float:
         return self._dynamic_delta.update(sig.delta, time.monotonic())

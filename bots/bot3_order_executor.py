@@ -195,6 +195,21 @@ class OrderExecutorBot:
                 )
                 continue
 
+            # ตรวจ CLOB liquidity ก่อนเลือก — skip ถ้า CLOB ไม่ตอบสนอง
+            yes_tok, _ = token_ids
+            clob_test = await self._client.get_price_clob(yes_tok)
+            if clob_test is None:
+                logger.debug(
+                    f"OrderExecutorBot: _auto_discover_market – skipping market "
+                    f"id={market.get('id')} q={market.get('question','')[:40]} (CLOB no price)"
+                )
+                continue
+
+            logger.info(
+                f"OrderExecutorBot: _auto_discover_market – CLOB ✓ market "
+                f"id={market.get('id')} q={market.get('question','')[:50]}"
+            )
+
             # Found a usable market
             new_market_id = str(market["id"])
             is_new = new_market_id != self._market_id

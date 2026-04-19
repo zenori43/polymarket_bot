@@ -220,6 +220,7 @@ class OrderExecutorBot:
             if is_new:
                 # ล้าง order/position เก่าจากตลาดที่แล้ว
                 self._last_order_signal = None
+                self._last_skip_reason = None
                 self._monitoring = False
                 self._sl_duration_count = 0
                 self._traded_this_market = False

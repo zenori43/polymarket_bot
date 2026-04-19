@@ -176,11 +176,11 @@ class OrderExecutorBot:
 
         sorted_markets = sorted(markets, key=_parse_end_date)
 
-        # เอาตลาดที่ยังไม่หมดอายุ เรียงจากใกล้หมดที่สุด
+        # เอาตลาดที่ยังเหลือเวลา > 60 วินาที (skip ตลาดใกล้หมด)
         now_utc = datetime.now(timezone.utc)
         candidates = [
             m for m in sorted_markets
-            if (_parse_end_date(m) - now_utc).total_seconds() > 0
+            if (_parse_end_date(m) - now_utc).total_seconds() > 60
         ]
         if not candidates:
             logger.info("_auto_discover_market: no active BTC markets found, will retry")

@@ -447,13 +447,14 @@ class PolymarketClient:
         url = f"{settings.GAMMA_URL}/markets"
         now_utc = datetime.now(timezone.utc)
         params = {
-            "closed":    "false",
-            "active":    "true",
-            "limit":     limit,
-            "order":     "endDate",
-            "ascending": "true",
-            "_t":        int(now_utc.timestamp()),
-            "_r":        _random.randint(1000, 9999),
+            "closed":        "false",
+            "active":        "true",
+            "limit":         limit,
+            "order":         "endDate",
+            "ascending":     "true",
+            "end_date_min":  now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "_t":            int(now_utc.timestamp()),
+            "_r":            _random.randint(1000, 9999),
         }
         try:
             client = await self._get_client()

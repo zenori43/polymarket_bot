@@ -698,6 +698,10 @@ class OrderExecutorBot:
                 continue  # CLOB ไม่มี — hold จนตลาดปิด ไม่ TP ไม่ panic sell
 
             if current_price is None:
+                if self._is_market_expired():
+                    logger.warning("OrderExecutorBot: monitor_loop – market expired with no price, closing position")
+                    await self.close_position(position, reason="tp", exit_price=position.get("entry_price", 0.0))
+                    return
                 logger.warning("OrderExecutorBot: monitor_loop – price unavailable (both CLOB+Gamma), skipping tick")
                 continue
 

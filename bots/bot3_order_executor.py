@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from config import settings
+from core.dynamic_delta import DynamicDeltaManager
 from core.polymarket_client import PolymarketClient
 from core.state_manager import StateManager
 from core.signal_bus import DeltaSignal, SignalBus
@@ -109,6 +110,10 @@ class OrderExecutorBot:
         self._last_order_signal: str | None = None  # UP/DOWN ของ order ล่าสุด
         self._clob_unavailable_since: float | None = None  # timestamp เมื่อ CLOB เริ่ม fail
         self._traded_this_market: bool = False  # 1 order ต่อตลาด — reset เมื่อตลาดใหม่
+        self._dynamic_delta: DynamicDeltaManager = DynamicDeltaManager(
+            base_threshold=settings.ENTRY_RANGE_LOWER,
+            sustain_seconds=settings.DYNAMIC_DELTA_SUSTAIN_SECONDS,
+        )
 
     def _send_panic_email(self) -> None:
         """Send a panic alert email using settings."""
@@ -356,10 +361,7 @@ class OrderExecutorBot:
     # ------------------------------------------------------------------
 
     def _dynamic_delta_threshold(self, sig: DeltaSignal) -> float:
-        threshold = settings.ENTRY_RANGE_LOWER
-        if abs(sig.ema_trade_delta) > 0.2:
-            threshold += 0.05
-        return threshold
+        return self._dynamic_delta.update(sig.delta, time.monotonic())
 
     # ------------------------------------------------------------------
     # Signal handling pipeline

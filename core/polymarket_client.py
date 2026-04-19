@@ -333,13 +333,11 @@ class PolymarketClient:
         if self._clob is not None:
             try:
                 from py_clob_client.clob_types import OrderArgs, OrderType
-                from py_clob_client.constants import BUY, SELL
-                side = BUY if order_args["side"] == "BUY" else SELL
                 args = OrderArgs(
                     token_id=order_args["token_id"],
                     price=order_args["price"],
                     size=order_args["size"],
-                    side=side,
+                    side=order_args["side"],  # "BUY" or "SELL" string directly
                 )
                 signed = self._clob.create_order(args)
                 result = self._clob.post_order(signed, OrderType.GTC)
@@ -381,8 +379,7 @@ class PolymarketClient:
         if self._clob is not None:
             try:
                 from py_clob_client.clob_types import MarketOrderArgs
-                from py_clob_client.constants import SELL
-                args = MarketOrderArgs(token_id=token_id, amount=size, side=SELL)
+                args = MarketOrderArgs(token_id=token_id, amount=size, side="SELL")
                 signed = self._clob.create_market_order(args)
                 result = self._clob.post_order(signed, order_type="FOK")
                 logger.info(f"market_sell_fok response: {result}")

@@ -414,36 +414,17 @@ class OrderExecutorBot:
         price = clob_price
 
         if clob_price is None:
-            now_ts = time.time()
             if self._clob_unavailable_since is None:
-                self._clob_unavailable_since = now_ts
-            clob_fail_secs = now_ts - self._clob_unavailable_since
-            if clob_fail_secs < 5.0:
-                return
-            fallback_price: Optional[float] = None
-            # fallback 1: last trade price (most recent actual transaction)
+                self._clob_unavailable_since = time.time()
+            # ลอง last-trade-price เพื่อแสดงราคาใน display เท่านั้น
             token_for_signal = self._yes_token_id if sig.signal == "UP" else self._no_token_id
             if token_for_signal:
-                fallback_price = await self._client.get_last_trade_price(token_for_signal)
-                if fallback_price is not None:
-                    logger.debug(f"OrderExecutorBot: using last_trade_price={fallback_price}")
-            # fallback 2: outcomePrices จาก market data
-            if fallback_price is None and self._outcome_up is not None:
-                fallback_price = self._outcome_up if sig.signal == "UP" else self._outcome_down
-                logger.debug(f"OrderExecutorBot: using outcomePrices={fallback_price}")
-            # fallback 3: slug endpoint
-            if fallback_price is None and self._market_slug:
-                fallback_price = await self._client.get_price_by_slug(self._market_slug)
-                if fallback_price is not None:
-                    logger.debug(f"OrderExecutorBot: using slug price={fallback_price}")
-            if fallback_price is not None:
-                clob_price = fallback_price
-                price = fallback_price
-            else:
-                self._last_skip_reason = "ไม่มีราคา (CLOB+fallback ✗)"
-                return
+                ltp = await self._client.get_last_trade_price(token_for_signal)
+                if ltp is not None:
+                    logger.debug(f"OrderExecutorBot: CLOB ✗ last_trade_price={ltp} (display only, no trade)")
+            self._last_skip_reason = "CLOB ✗ – ไม่เทรด"
+            return
         else:
-            # CLOB ใช้ได้จริง — reset timer
             self._clob_unavailable_since = None
         if price in settings.PRICE_FORBIDDEN:
             self._last_skip_reason = f"ราคา ${price:.3f} ห้ามเข้า"
@@ -911,10 +892,8 @@ class OrderExecutorBot:
                     print(f"  Up: ${up_display:.3f}  │  Down: ${down_display:.3f}")
                 if clob_p is not None:
                     print(f"  {GREEN}CLOB ✓{RESET}")
-                elif self._outcome_up is not None:
-                    print(f"  {YELLOW}CLOB ✗  Gamma: Up=${self._outcome_up:.3f} Down=${self._outcome_down:.3f}{RESET}")
                 else:
-                    print(f"  {RED}CLOB ✗{RESET}")
+                    print(f"  {RED}CLOB ✗  – last-trade-price only (ไม่เทรด){RESET}")
 
                 # แสดง position ถ้ามี
                 pos = self._state.open_position

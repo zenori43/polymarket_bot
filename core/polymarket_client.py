@@ -68,32 +68,33 @@ class PolymarketClient:
 
     async def get_price_clob(self, market_id: str) -> Optional[float]:
         """
-        Fetch best mid-price from the CLOB API.
+        Fetch midpoint price from CLOB API via POST /midpoints.
 
-        GET https://clob.polymarket.com/prices?token_id={market_id}
+        POST https://clob.polymarket.com/midpoints
+        Body: [{"token_id": "<token_id>"}]
+        Response: {"<token_id>": "0.72"}
 
         Returns None on timeout or any error.
         """
-        url = f"{settings.CLOB_URL}/price"
-        params = {"token_id": market_id, "side": "BUY"}
+        url = f"{settings.CLOB_URL}/midpoints"
         try:
             client = await self._get_client()
-            resp = await client.get(
+            resp = await client.post(
                 url,
-                params=params,
+                json=[{"token_id": market_id}],
                 timeout=httpx.Timeout(_CLOB_TIMEOUT_S),
             )
             resp.raise_for_status()
             data = resp.json()
-            price_str: Optional[str] = data.get("price") or data.get("mid")
+            price_str = data.get(market_id)
             if price_str is None:
-                logger.warning(f"CLOB price response missing 'price' key for {market_id}: {data}")
+                logger.warning(f"CLOB midpoints response missing token for {market_id}: {data}")
                 return None
             price = float(price_str)
-            logger.debug(f"CLOB price for {market_id}: {price}")
+            logger.debug(f"CLOB midpoint for {market_id}: {price}")
             return price
         except httpx.TimeoutException:
-            logger.debug(f"CLOB price timeout for market_id={market_id}")
+            logger.debug(f"CLOB midpoints timeout for market_id={market_id}")
             return None
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:

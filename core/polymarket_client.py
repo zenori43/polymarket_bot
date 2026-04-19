@@ -38,6 +38,9 @@ class PolymarketClient:
         self._client: Optional[httpx.AsyncClient] = None
         # CLOB price cache: token_id → (price, timestamp) — TTL 2s to avoid hammering
         self._clob_cache: dict[str, tuple[Optional[float], float]] = {}
+        # open-positions cache: wallet → (positions, timestamp) — TTL 5s to avoid flood
+        self._positions_cache: dict[str, tuple[list[dict], float]] = {}
+        self._positions_error_until: dict[str, float] = {}  # backoff until timestamp
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -246,18 +249,35 @@ class PolymarketClient:
 
         GET https://data-api.polymarket.com/positions?user={wallet}
         """
+        now = time.monotonic()
+
+        # return backoff silence — API was recently unreachable
+        backoff_until = self._positions_error_until.get(wallet, 0.0)
+        if now < backoff_until:
+            cached = self._positions_cache.get(wallet)
+            return cached[0] if cached else []
+
+        # return cached result if fresh (5 s TTL)
+        cached = self._positions_cache.get(wallet)
+        if cached and (now - cached[1]) < 5.0:
+            return cached[0]
+
         url = f"{settings.DATA_API_URL}/positions"
         params = {"user": wallet}
         try:
             client = await self._get_client()
-            resp = await client.get(url, params=params)
+            resp = await client.get(url, params=params, timeout=httpx.Timeout(10.0))
             resp.raise_for_status()
             positions: list[dict] = resp.json()
+            self._positions_cache[wallet] = (positions, now)
+            self._positions_error_until.pop(wallet, None)
             logger.debug(f"get_open_positions: {len(positions)} positions for {wallet}")
             return positions
         except Exception as exc:
-            logger.error(f"get_open_positions error for wallet={wallet}: {exc}")
-            return []
+            logger.error(f"get_open_positions error for wallet={wallet}: {repr(exc)}")
+            self._positions_error_until[wallet] = now + 15.0  # backoff 15 s
+            cached = self._positions_cache.get(wallet)
+            return cached[0] if cached else []
 
     async def get_resolved_claimable(self, wallet: str) -> list[dict]:
         """

@@ -82,28 +82,28 @@ class PolymarketClient:
             resp = await client.post(
                 url,
                 json=[{"token_id": market_id}],
-                timeout=httpx.Timeout(_CLOB_TIMEOUT_S),
+                timeout=httpx.Timeout(3.0),
             )
             resp.raise_for_status()
             data = resp.json()
             price_str = data.get(market_id)
             if price_str is None:
-                logger.warning(f"CLOB midpoints response missing token for {market_id}: {data}")
+                logger.warning(f"CLOB midpoints response missing token for {market_id[:16]}…: {data}")
                 return None
             price = float(price_str)
-            logger.debug(f"CLOB midpoint for {market_id}: {price}")
+            logger.debug(f"CLOB midpoint for {market_id[:16]}…: {price}")
             return price
         except httpx.TimeoutException:
-            logger.debug(f"CLOB midpoints timeout for market_id={market_id}")
+            logger.warning(f"CLOB midpoints timeout (3s) for market_id={market_id[:16]}…")
             return None
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                logger.debug(f"CLOB price 404 for market_id={market_id} (no liquidity)")
-            else:
-                logger.warning(f"CLOB price HTTP {exc.response.status_code} for market_id={market_id}")
+            logger.warning(
+                f"CLOB midpoints HTTP {exc.response.status_code} for market_id={market_id[:16]}… "
+                f"body={exc.response.text[:200]}"
+            )
             return None
         except Exception as exc:
-            logger.debug(f"CLOB price unavailable for market_id={market_id}: {exc}")
+            logger.warning(f"CLOB midpoints error for market_id={market_id[:16]}…: {type(exc).__name__}: {exc}")
             return None
 
     async def get_last_trade_price(self, token_id: str) -> Optional[float]:

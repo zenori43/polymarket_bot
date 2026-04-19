@@ -182,9 +182,10 @@ class OrderExecutorBot:
             m for m in sorted_markets
             if 0 < (_parse_end_date(m) - now_utc).total_seconds() <= 600
         ]
-        candidates = five_min_markets if five_min_markets else sorted_markets
         if not five_min_markets:
-            logger.warning("_auto_discover_market: no 5-min markets found, trying all markets")
+            logger.info("_auto_discover_market: no 5-min markets found yet, will retry")
+            return False
+        candidates = five_min_markets
 
         for market in candidates:
             token_ids = self._client.extract_token_ids(market)

@@ -380,7 +380,12 @@ class OrderExecutorBot:
                     await self._auto_discover_market()
                     continue
 
-                sig: DeltaSignal = await self._bus.subscribe()
+                try:
+                    sig: DeltaSignal = await asyncio.wait_for(
+                        self._bus.subscribe(), timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    continue
                 asyncio.create_task(self._handle_signal(sig))
             except asyncio.CancelledError:
                 logger.info("OrderExecutorBot received cancellation – shutting down")

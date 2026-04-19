@@ -4,19 +4,21 @@ bots/bot1_delta_signal.py
 DeltaSignalBot – connects to Binance WebSocket @trade stream and publishes
 DeltaSignal events to the shared SignalBus.
 
-Algorithm per trade message
-────────────────────────────
+Algorithm per trade message (mirrors monitor_delta.py)
+───────────────────────────────────────────────────────
 1. Parse trade price, qty, and maker side from the @trade message.
 2. Compute price_delta_pct relative to the start of the current 5-min window.
    - window_open_price resets whenever the 5-min window rolls over.
 3. Maintain a sliding window (TRADE_WINDOW_SEC) of (timestamp, side, volume)
    tuples to compute raw buy/sell imbalance, then smooth with EMA.
-4. Derive signal from price_delta_pct vs PRICE_DELTA_THRESH.
-5. Invert detection (same as before):
+4. Derive price signal from price_delta_pct vs PRICE_DELTA_THRESH.
+5. Derive ema_signal from ema_trade_delta vs EMA_THRESHOLD.
+6. Invert detection (same as monitor_delta):
      - If current signal differs from prev_signal → increment invert_tick_count
      - Else reset invert_tick_count to 0
      - If invert_tick_count >= INVERT_CONFIRM_TICKS → invert=True, reset count
-6. Publish DeltaSignal(signal, delta=ema_trade_delta, invert=...) to SignalBus.
+     (no EMA confirmation required — same as monitor_delta)
+7. Publish DeltaSignal when price signal is not NEUTRAL (including conflicts).
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ import websockets
 from websockets.exceptions import ConnectionClosedError, WebSocketException
 
 from config import settings
+from core.dynamic_delta import DynamicDeltaManager
 from core.signal_bus import DeltaSignal, SignalBus
 from utils.logger import get_logger
 
@@ -51,17 +54,21 @@ class DeltaSignalBot:
     signal_bus : shared SignalBus instance
     """
 
-    # ── Algorithm constants (not in settings – these are algo params) ──────
+    # ── Algorithm constants (mirrors monitor_delta.py) ──────────────────────
     _TRADE_STREAM_URL:  str   = "wss://stream.binance.com/ws/btcusdt@trade"
     _TRADE_WINDOW_SEC:  int   = 5
     _EMA_ALPHA:         float = 0.02
-    # ใช้ค่าจาก settings เพื่อให้ threshold ตรงกับ gate 3 (ENTRY_RANGE_LOWER)
-    _EMA_THRESHOLD:     float = 0.05    # EMA imbalance threshold for ema_signal classification
+    _EMA_THRESHOLD:     float = 0.03    # matches monitor_delta EMA_THRESHOLD
 
     # -----------------------------------------------------------------------
 
     def __init__(self, signal_bus: SignalBus) -> None:
         self._bus: SignalBus = signal_bus
+
+        self._dynamic_delta: DynamicDeltaManager = DynamicDeltaManager(
+            base_threshold=settings.ENTRY_RANGE_LOWER,
+            sustain_seconds=settings.DYNAMIC_DELTA_SUSTAIN_SECONDS,
+        )
 
         # Invert detection state
         self._prev_signal: Optional[str] = None
@@ -72,6 +79,10 @@ class DeltaSignalBot:
         self._prev_window_start: Optional[datetime] = None
         self._trade_window: deque = deque()          # (timestamp_sec, side, volume)
         self._ema_trade_delta: float = 0.0
+
+        # Confirm path: delta >= CONFIRM_THRESHOLD + EMA ตรงทิศ + ยืน 3 วิ
+        self._confirm_above_since: Optional[float] = None
+        self._confirm_signal: Optional[str] = None  # ทิศที่กำลัง track อยู่
 
     # ------------------------------------------------------------------
     # Helpers
@@ -180,6 +191,15 @@ class DeltaSignalBot:
                 (current_price - self._window_open_price) / self._window_open_price * 100
             )
 
+            prev_threshold = self._dynamic_delta.threshold
+            current_threshold = self._dynamic_delta.update(price_delta_pct, time.monotonic())
+            if current_threshold != prev_threshold:
+                logger.info(
+                    f"DeltaSignalBot: dynamic threshold bumped "
+                    f"{prev_threshold:.4f} → {current_threshold:.4f} "
+                    f"(price_delta={price_delta_pct:+.4f}%)"
+                )
+
             # ── Step 3: sliding trade window + EMA ────────────────────────
             # Append new trade
             self._trade_window.append((now_ts, side, volume))
@@ -201,9 +221,9 @@ class DeltaSignalBot:
             )
 
             # ── Step 4: signal from price_delta_pct ───────────────────────
-            if price_delta_pct > settings.ENTRY_RANGE_LOWER:
+            if price_delta_pct > current_threshold:
                 signal_str = "UP"
-            elif price_delta_pct < -settings.ENTRY_RANGE_LOWER:
+            elif price_delta_pct < -current_threshold:
                 signal_str = "DOWN"
             else:
                 signal_str = "NEUTRAL"
@@ -216,41 +236,53 @@ class DeltaSignalBot:
             else:
                 ema_signal = "NEUTRAL"
 
-            # ── Step 5: invert detection ───────────────────────────────────
-            # Invert only if price flips direction AND ema confirms the new direction
+            # ── Step 5: invert detection (mirrors monitor_delta logic) ───────
+            # Any signal change increments counter — no EMA gate required
             invert: bool = False
             if self._prev_signal is not None and signal_str != self._prev_signal:
-                # price พลิกทิศ — ตรวจว่า ema ยืนยันทิศใหม่หรือไม่
-                if ema_signal == signal_str and signal_str != "NEUTRAL":
-                    self._invert_tick_count += 1
-                    if self._invert_tick_count >= settings.INVERT_CONFIRM_TICKS:
-                        invert = True
-                        self._invert_tick_count = 0
-                        logger.info(f"DeltaSignalBot: INVERT CONFIRMED ({self._prev_signal}→{signal_str}, ema={ema_signal})")
-                else:
-                    # ema ไม่ยืนยัน (conflict) → reset counter
+                self._invert_tick_count += 1
+                if self._invert_tick_count >= settings.INVERT_CONFIRM_TICKS:
+                    invert = True
                     self._invert_tick_count = 0
+                    logger.info(
+                        f"DeltaSignalBot: INVERT CONFIRMED "
+                        f"({self._prev_signal}→{signal_str}, ema={ema_signal})"
+                    )
             else:
                 self._invert_tick_count = 0
 
             self._prev_signal = signal_str
 
-            # ── Step 6: publish (only when price and ema signals confirm) ──
-            # NEUTRAL signal หรือ NEUTRAL ema → ไม่ publish
-            if signal_str == "NEUTRAL" or ema_signal == "NEUTRAL":
-                logger.debug(f"DeltaSignalBot: skip publish – signal={signal_str} ema={ema_signal} (NEUTRAL)")
-                return
-            if signal_str != ema_signal:
-                logger.debug(f"DeltaSignalBot: skip publish – CONFLICT signal={signal_str} ema={ema_signal}")
+            # ── Step 6: publish when price signal is not NEUTRAL ──────────
+            if signal_str == "NEUTRAL":
+                self._confirm_above_since = None
+                logger.debug(f"DeltaSignalBot: skip publish – price signal NEUTRAL")
                 return
 
-            # Confirmed signal — publish
+            # ── Confirm path: delta >= CONFIRM_THRESHOLD + EMA ตรงทิศ + ยืน 3 วิ ──
+            ema_agrees = ema_signal == signal_str
+            now_mono = time.monotonic()
+            if abs(price_delta_pct) >= settings.CONFIRM_THRESHOLD and ema_agrees:
+                if self._confirm_above_since is None or self._confirm_signal != signal_str:
+                    self._confirm_above_since = now_mono
+                    self._confirm_signal = signal_str
+                confirmed = (now_mono - self._confirm_above_since) >= settings.DYNAMIC_DELTA_SUSTAIN_SECONDS
+                if confirmed:
+                    logger.info(
+                        f"DeltaSignalBot: CONFIRM signal={signal_str} "
+                        f"delta={price_delta_pct:+.4f}% ema={self._ema_trade_delta:+.4f}"
+                    )
+            else:
+                self._confirm_above_since = None
+                self._confirm_signal = None
+                confirmed = False
             sig = DeltaSignal(
                 signal=signal_str,
-                delta=price_delta_pct,   # ส่ง price_delta_pct เป็น delta (หน่วย %)
+                delta=price_delta_pct,
                 ema_trade_delta=self._ema_trade_delta,
                 timestamp=int(now_ts),
                 invert=invert,
+                confirmed=confirmed,
             )
             await self._bus.publish(sig)
 
@@ -258,7 +290,8 @@ class DeltaSignalBot:
                 f"DeltaSignalBot: price={current_price:.2f} "
                 f"price_delta={price_delta_pct:+.4f}% "
                 f"ema_delta={self._ema_trade_delta:+.6f} "
-                f"signal={signal_str} ema_signal={ema_signal} invert={invert}"
+                f"signal={signal_str} ema_signal={ema_signal} "
+                f"confirmed={confirmed} invert={invert}"
             )
 
         except json.JSONDecodeError as exc:

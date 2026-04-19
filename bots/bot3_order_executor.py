@@ -108,6 +108,7 @@ class OrderExecutorBot:
         self._market_round: int = 0  # นับตลาดที่ผ่านมา
         self._last_order_signal: str | None = None  # UP/DOWN ของ order ล่าสุด
         self._clob_unavailable_since: float | None = None  # timestamp เมื่อ CLOB เริ่ม fail
+        self._traded_this_market: bool = False  # 1 order ต่อตลาด — reset เมื่อตลาดใหม่
 
     def _send_panic_email(self) -> None:
         """Send a panic alert email using settings."""
@@ -215,6 +216,8 @@ class OrderExecutorBot:
                 self._last_order_signal = None
                 self._monitoring = False
                 self._sl_duration_count = 0
+                self._traded_this_market = False
+                self._bus.reset_invert()
                 if settings.DRY_RUN and self._state.open_position:
                     self._state._state["open_position"] = None
                     self._state._save()
@@ -349,6 +352,16 @@ class OrderExecutorBot:
                 logger.error(f"OrderExecutorBot: error in main loop: {exc}")
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _dynamic_delta_threshold(self, sig: DeltaSignal) -> float:
+        threshold = settings.ENTRY_RANGE_LOWER
+        if abs(sig.ema_trade_delta) > 0.2:
+            threshold += 0.05
+        return threshold
+
+    # ------------------------------------------------------------------
     # Signal handling pipeline
     # ------------------------------------------------------------------
 
@@ -432,8 +445,15 @@ class OrderExecutorBot:
         # ปรับราคาตาม signal — ถ้า DOWN ใช้ราคา NO token = 1 - YES
         if sig.signal == "DOWN":
             price = round(1 - price, 4)
-        if price > 0.90:
-            self._last_skip_reason = f"ราคา ${price:.3f} แพงเกินไป (> $0.90)"
+        if price < settings.MIN_ENTRY_PRICE:
+            self._last_skip_reason = f"ราคา ${price:.3f} ต่ำกว่า min ({settings.MIN_ENTRY_PRICE:.2f})"
+            return
+        potential_gain = (settings.TP_PRICE_CAP - price) / price
+        if potential_gain < settings.MIN_TP_GAIN:
+            self._last_skip_reason = (
+                f"ราคา ${price:.3f} ใกล้ cap เกิน – gain ถึง TP แค่ {potential_gain:.1%} "
+                f"(< {settings.MIN_TP_GAIN:.0%})"
+            )
             return
         _gate2_msg = f"Gate 2: price=${price:.3f} (ok)"
 
@@ -441,13 +461,21 @@ class OrderExecutorBot:
         if sig.signal == "NEUTRAL":
             return
 
-        effective_entry_threshold = settings.ENTRY_RANGE_LOWER
-        if abs(sig.ema_trade_delta) > 0.2:
-            effective_entry_threshold += 0.05
+        if not sig.confirmed:
+            effective_entry_threshold = self._dynamic_delta_threshold(sig)
+            abs_delta = abs(sig.delta)
+            if abs_delta < effective_entry_threshold:
+                self._last_skip_reason = f"Δ={abs_delta:.4f}% ต่ำกว่า threshold {effective_entry_threshold:.3f}%"
+                return
 
-        abs_delta = abs(sig.delta)
-        if abs_delta < effective_entry_threshold:
-            self._last_skip_reason = f"Δ={abs_delta:.4f}% ต่ำกว่า threshold {effective_entry_threshold:.3f}%"
+        # ── CHECK: 1 order ต่อตลาด ───────────────────────────────────
+        if self._traded_this_market:
+            self._last_skip_reason = "เข้าไปแล้ว 1 ครั้งในตลาดนี้"
+            return
+
+        # ── CHECK: Existing Position ──────────────────────────────────
+        if self._monitoring:
+            self._last_skip_reason = "มี position เปิดอยู่แล้ว"
             return
 
         # ── CHECK: USDC Cash Balance (skip in dry run) ───────────────
@@ -462,11 +490,6 @@ class OrderExecutorBot:
                 if usdc_balance < 5.0:
                     self._last_skip_reason = f"เงินไม่พอ ${usdc_balance:.2f} (< $5)"
                     return
-
-        # ── CHECK: Existing Position ──────────────────────────────────
-        if self._monitoring:
-            self._last_skip_reason = "มี position เปิดอยู่แล้ว"
-            return
 
         existing = await self._client.get_open_positions(settings.WALLET_ADDRESS)
         open_for_market = [
@@ -502,20 +525,43 @@ class OrderExecutorBot:
                 "side":     "BUY",
             }
 
-            # รอ 3 วิ แล้ว re-confirm ว่า delta ยังเกิน threshold (กัน spike)
-            logger.debug("OrderExecutorBot: waiting 3s to confirm delta is not a spike...")
-            await asyncio.sleep(3)
+            # รอ re-confirm: confirmed=True → 3 วิ, normal → 5 วิ + EMA ต้องตรงทิศ
+            wait_secs = 3 if sig.confirmed else 5
+            logger.debug(f"OrderExecutorBot: waiting {wait_secs}s to confirm (confirmed={sig.confirmed})...")
+            await asyncio.sleep(wait_secs)
             latest = self._bus.latest()
             if latest is None or latest.signal != sig.signal:
-                self._last_skip_reason = f"spike – signal เปลี่ยนใน 3s"
+                self._last_skip_reason = f"spike – signal เปลี่ยนใน {wait_secs}s"
                 self._monitoring = False
                 return
-            effective_threshold = settings.ENTRY_RANGE_LOWER + (0.05 if abs(latest.ema_trade_delta) > 0.2 else 0.0)
+            effective_threshold = self._dynamic_delta_threshold(latest)
             if abs(latest.delta) < effective_threshold:
-                self._last_skip_reason = f"delta ร่วงใน 3s ({abs(latest.delta):.4f}% < {effective_threshold:.3f}%)"
+                self._last_skip_reason = f"delta ร่วงใน {wait_secs}s ({abs(latest.delta):.4f}% < {effective_threshold:.3f}%)"
                 self._monitoring = False
                 return
-            self._last_skip_reason = None  # ผ่านทุก check แล้ว
+            if not sig.confirmed:
+                # normal path — EMA ต้องไม่ conflict
+                ema_positive = latest.ema_trade_delta > 0
+                signal_up = latest.signal == "UP"
+                if ema_positive != signal_up:
+                    self._last_skip_reason = f"EMA conflict – signal={latest.signal} ema={latest.ema_trade_delta:+.4f}"
+                    self._monitoring = False
+                    return
+
+            # re-fetch ราคาล่าสุดหลัง wait — ใช้ราคาที่ถูกต้อง ณ เวลาส่ง order
+            fresh_price = await self._client.get_price_clob(token_id)
+            if fresh_price is not None:
+                if sig.signal == "DOWN":
+                    fresh_price = round(1 - fresh_price, 4)
+                if (fresh_price < settings.MIN_ENTRY_PRICE
+                        or (settings.TP_PRICE_CAP - fresh_price) / fresh_price < settings.MIN_TP_GAIN):
+                    self._last_skip_reason = f"ราคาหลัง wait ไม่เหมาะ ${fresh_price:.3f}"
+                    self._monitoring = False
+                    return
+                entry_price = fresh_price
+                order_args["price"] = entry_price
+
+            self._last_skip_reason = None
         except Exception:
             self._monitoring = False
             raise
@@ -533,6 +579,7 @@ class OrderExecutorBot:
             return
 
         self._last_order_signal = sig.signal
+        self._traded_this_market = True
         dry_tag = " [DRY RUN]" if settings.DRY_RUN else ""
         logger.info(
             f"ORDER {sig.signal}{dry_tag} @ ${entry_price:.3f} size={_DEFAULT_ORDER_SIZE_USDC} "
@@ -605,13 +652,7 @@ class OrderExecutorBot:
                         position=position,
                         current_price=current_price,
                     )
-                # ยังเช็ค invert panic sell ได้แม้ CLOB ไม่มี
-                latest = self._bus.latest()
-                if latest is not None and latest.invert:
-                    logger.warning(f"OrderExecutorBot: INVERT while CLOB dry – panic sell")
-                    await self.close_position(position, reason="panic_sell")
-                    return
-                continue  # skip TP/SL — รอหมดเวลาตลาด
+                continue  # CLOB ไม่มี — hold จนตลาดปิด ไม่ TP ไม่ panic sell
 
             if current_price is None:
                 logger.warning("OrderExecutorBot: monitor_loop – price unavailable (both CLOB+Gamma), skipping tick")
@@ -657,38 +698,22 @@ class OrderExecutorBot:
             else:
                 self._sl_duration_count = 0
 
-            # ── Invert Panic Sell (delta signal) ──────────────────────
-            latest = self._bus.latest()
-            if latest is not None and latest.invert:
-                # Task A6: Panic sell time/volume gate
-                seconds_remaining = 999
-                if self._market_end_date:
-                    try:
-                        end_dt = datetime.fromisoformat(self._market_end_date.replace("Z", "+00:00"))
-                        seconds_remaining = (end_dt - datetime.now(timezone.utc)).total_seconds()
-                    except Exception:
-                        pass
-
-                if seconds_remaining <= 15 or abs(latest.ema_trade_delta) > 0.2:
-                    logger.warning(
-                        f"OrderExecutorBot: INVERT DETECTED – panic sell "
-                        f"market={market_id} (rem={seconds_remaining:.0f}s, ema={latest.ema_trade_delta:.4f})"
-                    )
-                    await self.close_position(position, reason="panic_sell")
-                    return
-                else:
-                    logger.debug(
-                        f"OrderExecutorBot: INVERT suppressed (gate not met: rem={seconds_remaining:.0f}s, "
-                        f"ema={latest.ema_trade_delta:.4f})"
-                    )
-
-            # ── Take Profit ────────────────────────────────────────────
-            if pnl >= settings.TP_LOW:
-                logger.info(
-                    f"OrderExecutorBot: TP_LOW reached ({pnl:.2%}) – "
-                    f"closing position market={market_id}"
+            # ── Invert Panic Sell (trust bot1 signal directly) ────────
+            if self._bus.check_and_clear_invert():
+                logger.warning(
+                    f"OrderExecutorBot: INVERT DETECTED – panic sell market={market_id}"
                 )
-                await self.close_position(position, reason="tp_low", exit_price=current_price)
+                await self.close_position(position, reason="panic_sell")
+                return
+
+            # ── Take Profit (dynamic — target price cap) ───────────────
+            if current_price >= settings.TP_PRICE_CAP:
+                tp_pct = (current_price - entry_price) / entry_price
+                logger.info(
+                    f"OrderExecutorBot: TP reached price={current_price:.3f} "
+                    f"(cap={settings.TP_PRICE_CAP}) gain={tp_pct:.2%}"
+                )
+                await self.close_position(position, reason="tp", exit_price=current_price)
                 return
 
     # ------------------------------------------------------------------

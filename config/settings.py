@@ -45,12 +45,15 @@ TIME_GATE_MAX: int = int(os.getenv("TIME_GATE_MAX", "220"))   # seconds
 # Price gate – prices at which entry is forbidden
 # ---------------------------------------------------------------------------
 PRICE_FORBIDDEN: list[float] = [0.00, 0.01, 0.99, 1.00]
+MIN_ENTRY_PRICE: float = float(os.getenv("MIN_ENTRY_PRICE", "0.67"))
 
 # ---------------------------------------------------------------------------
 # Take-profit levels
 # ---------------------------------------------------------------------------
-TP_LOW: float = float(os.getenv("TP_LOW", "0.10"))    # +10% → full close
-TP_HIGH: float = float(os.getenv("TP_HIGH", "0.15"))  # +15%
+TP_LOW: float = float(os.getenv("TP_LOW", "0.10"))    # fallback % (ไม่ใช้แล้ว)
+TP_HIGH: float = float(os.getenv("TP_HIGH", "0.15"))  # fallback % (ไม่ใช้แล้ว)
+TP_PRICE_CAP: float = float(os.getenv("TP_PRICE_CAP", "0.95"))  # ราคาเป้าหมาย TP
+MIN_TP_GAIN: float = float(os.getenv("MIN_TP_GAIN", "0.10"))    # gain ขั้นต่ำที่ต้องมีก่อนเข้า
 
 # ---------------------------------------------------------------------------
 # Timeouts / intervals
@@ -105,3 +108,9 @@ EMAIL_TO: str = os.getenv("EMAIL_TO", "")
 EMAIL_SMTP_HOST: str = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
 EMAIL_SMTP_PORT: int = int(os.getenv("EMAIL_SMTP_PORT", "587"))
 EMAIL_PASSWORD: str = os.getenv("EMAIL_PASSWORD", "")
+
+# ---------------------------------------------------------------------------
+# Dynamic delta
+# ---------------------------------------------------------------------------
+DYNAMIC_DELTA_SUSTAIN_SECONDS: float = float(os.getenv("DYNAMIC_DELTA_SUSTAIN_SECONDS", "3.0"))
+CONFIRM_THRESHOLD: float = float(os.getenv("CONFIRM_THRESHOLD", "0.1"))

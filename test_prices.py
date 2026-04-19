@@ -17,30 +17,56 @@ import httpx
 CLOB_URL   = "https://clob.polymarket.com"
 GAMMA_URL  = "https://gamma-api.polymarket.com"
 
-SLUG_5MIN  = "will-btc-price-increase-in-the-next-5-minutes"  # slug หลักของซีรีส์ 5-min
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Gamma helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def gamma_find_active_5min(client: httpx.AsyncClient) -> dict | None:
-    """ค้นหาตลาด 5-min ที่กำลัง active อยู่จาก Gamma"""
-    url = f"{GAMMA_URL}/markets"
-    params = {
-        "slug":   SLUG_5MIN,
-        "active": "true",
-        "closed": "false",
-        "limit":  5,
+    """
+    ค้นหาตลาด BTC 5-min Up/Down ที่ active — ใช้ end_date_min/max filter
+    แบบเดียวกับที่ bot ใช้จริง
+    """
+    from datetime import datetime, timezone, timedelta
+    import random
+
+    now_utc = datetime.now(timezone.utc)
+    cutoff  = now_utc + timedelta(minutes=30)
+    url     = f"{GAMMA_URL}/markets"
+    params  = {
+        "closed":       "false",
+        "limit":        50,
+        "order":        "endDate",
+        "ascending":    "true",
+        "end_date_min": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end_date_max": cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "_t":           int(now_utc.timestamp()),
+        "_r":           random.randint(1000, 9999),
     }
     r = await client.get(url, params=params, timeout=10.0)
     r.raise_for_status()
-    data = r.json()
-    markets = data if isinstance(data, list) else data.get("markets", [])
-    if not markets:
-        return None
-    # เอาอันที่ endDate ใกล้สุด (active ล่าสุด)
-    return markets[0]
+    markets = r.json()
+    if not isinstance(markets, list):
+        markets = markets.get("markets", [])
+
+    for m in markets:
+        q = m.get("question", "").lower()
+        if ("up" in q and "down" in q) and ("btc" in q or "bitcoin" in q):
+            return m
+
+    # ถ้าไม่เจอใน 30 นาที ขยายเป็น 2 ชั่วโมง
+    params["end_date_max"] = (now_utc + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    r = await client.get(url, params=params, timeout=10.0)
+    r.raise_for_status()
+    markets = r.json()
+    if not isinstance(markets, list):
+        markets = markets.get("markets", [])
+    for m in markets:
+        q = m.get("question", "").lower()
+        if ("up" in q and "down" in q) and ("btc" in q or "bitcoin" in q):
+            return m
+
+    return None
 
 
 async def gamma_get_prices(client: httpx.AsyncClient, condition_id: str) -> dict:

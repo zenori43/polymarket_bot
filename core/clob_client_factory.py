@@ -20,7 +20,7 @@ def create_clob_client() -> ClobClient:
         key=settings.PRIVATE_KEY,
         chain_id=settings.CHAIN_ID,
         signature_type=settings.SIGNATURE_TYPE,
-        funder=settings.FUNDER if settings.FUNDER else settings.WALLET_ADDRESS,
+        funder=settings.WALLET_ADDRESS,  # proxy wallet address (maker in orders)
     )
     try:
         creds = client.create_or_derive_api_creds()

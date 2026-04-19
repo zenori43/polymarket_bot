@@ -176,16 +176,15 @@ class OrderExecutorBot:
 
         sorted_markets = sorted(markets, key=_parse_end_date)
 
-        # กรองเอาเฉพาะ market ที่หมดภายใน 10 นาที (5-min round)
+        # เอาตลาดที่ยังไม่หมดอายุ เรียงจากใกล้หมดที่สุด
         now_utc = datetime.now(timezone.utc)
-        five_min_markets = [
+        candidates = [
             m for m in sorted_markets
-            if 0 < (_parse_end_date(m) - now_utc).total_seconds() <= 600
+            if (_parse_end_date(m) - now_utc).total_seconds() > 0
         ]
-        if not five_min_markets:
-            logger.info("_auto_discover_market: no 5-min markets found yet, will retry")
+        if not candidates:
+            logger.info("_auto_discover_market: no active BTC markets found, will retry")
             return False
-        candidates = five_min_markets
 
         for market in candidates:
             token_ids = self._client.extract_token_ids(market)

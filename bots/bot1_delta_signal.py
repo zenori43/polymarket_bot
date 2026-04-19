@@ -268,7 +268,7 @@ class DeltaSignalBot:
                     self._confirm_signal = signal_str
                 confirmed = (now_mono - self._confirm_above_since) >= settings.DYNAMIC_DELTA_SUSTAIN_SECONDS
                 if confirmed:
-                    logger.info(
+                    logger.debug(
                         f"DeltaSignalBot: CONFIRM signal={signal_str} "
                         f"delta={price_delta_pct:+.4f}% ema={self._ema_trade_delta:+.4f}"
                     )

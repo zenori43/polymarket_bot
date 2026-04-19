@@ -229,14 +229,20 @@ class PolymarketClient:
 
     async def get_price(self, market_id: str) -> Optional[float]:
         """
-        Fetch price with CLOB → Gamma fallback.
+        Fetch price: CLOB midpoint → last-trade-price → Gamma (fallback chain).
 
-        Returns None if both endpoints fail.
+        Returns None if all three endpoints fail.
         """
         price = await self.get_price_clob(market_id)
         if price is not None:
             return price
-        logger.info(f"CLOB price unavailable for {market_id}, falling back to Gamma")
+
+        logger.info(f"CLOB midpoint unavailable for {market_id[:16]}…, trying last-trade-price")
+        price = await self.get_last_trade_price(market_id)
+        if price is not None:
+            return price
+
+        logger.info(f"last-trade-price unavailable for {market_id[:16]}…, falling back to Gamma")
         return await self.get_price_gamma(market_id)
 
     # ------------------------------------------------------------------

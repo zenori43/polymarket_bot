@@ -69,16 +69,22 @@ async def gamma_find_active_5min(client: httpx.AsyncClient) -> dict | None:
     return None
 
 
-async def gamma_get_prices(client: httpx.AsyncClient, condition_id: str) -> dict:
+async def gamma_get_prices(
+    client: httpx.AsyncClient,
+    condition_id: str,
+    market: dict | None = None,
+) -> dict:
     """
-    ดึงราคา Up/Down จาก Gamma โดยใช้ condition ID (= market_id ใน Gamma)
+    ดึงราคา Up/Down จาก Gamma
+    ถ้ามี market dict อยู่แล้วจะใช้เลย ไม่ fetch ซ้ำ
     Return: {"up": float|None, "down": float|None, "raw": dict}
     """
-    url = f"{GAMMA_URL}/markets"
-    r = await client.get(url, params={"id": condition_id}, timeout=10.0)
-    r.raise_for_status()
-    data = r.json()
-    market = data[0] if isinstance(data, list) and data else data
+    if market is None:
+        url = f"{GAMMA_URL}/markets"
+        r = await client.get(url, params={"id": condition_id}, timeout=10.0)
+        r.raise_for_status()
+        data = r.json()
+        market = data[0] if isinstance(data, list) and data else data
 
     up = down = None
 
@@ -213,12 +219,23 @@ async def main() -> None:
                 print(f"  end_date : {end_date}")
                 print(f"  condition: {condition_id}\n")
                 yes_token, no_token = extract_tokens(market)
+                # เก็บ market dict ไว้ใช้เลย ไม่ต้อง fetch ซ้ำ
+                prefetched_market = market
 
         # ── 2. Gamma prices ───────────────────────────────────────────
         print("=" * 55)
         print("GAMMA")
         print("=" * 55)
-        if condition_id:
+        g: dict = {"up": None, "down": None, "raw": {}}
+        if "prefetched_market" in dir():
+            # ใช้ข้อมูลที่มีอยู่แล้ว ไม่ fetch ซ้ำ
+            t0 = time.perf_counter()
+            g = await gamma_get_prices(client, prefetched_market.get("id", condition_id), prefetched_market)
+            ms = (time.perf_counter() - t0) * 1000
+            print(f"  Up   (outcomePrices[0]) : {fmt(g['up'])}")
+            print(f"  Down (outcomePrices[1]) : {fmt(g['down'])}")
+            print(f"  latency : {ms:.0f} ms")
+        elif condition_id:
             t0 = time.perf_counter()
             g = await gamma_get_prices(client, condition_id)
             ms = (time.perf_counter() - t0) * 1000

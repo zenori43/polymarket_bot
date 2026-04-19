@@ -58,7 +58,7 @@ _BTC_MARKET_ID: str = settings.__dict__.get("BTC_MARKET_ID", "BTC_UP_DOWN_PLACEH
 _MONITOR_TICK_INTERVAL: float = 1.0
 
 # Default order size in USDC (plain units, not 6-decimal micro-units)
-_DEFAULT_ORDER_SIZE_USDC: float = 10.0
+_DEFAULT_ORDER_SIZE_USDC: float = 5.0
 
 
 def _seconds_in_current_5min_window() -> int:
@@ -110,6 +110,7 @@ class OrderExecutorBot:
         self._last_order_signal: str | None = None  # UP/DOWN ของ order ล่าสุด
         self._clob_unavailable_since: float | None = None  # timestamp เมื่อ CLOB เริ่ม fail
         self._traded_this_market: bool = False  # 1 order ต่อตลาด — reset เมื่อตลาดใหม่
+        self._pending_order_id: str | None = None  # GTC order ที่ยังค้างอยู่
         self._dynamic_delta: DynamicDeltaManager = DynamicDeltaManager(
             base_threshold=settings.ENTRY_RANGE_LOWER,
             sustain_seconds=settings.DYNAMIC_DELTA_SUSTAIN_SECONDS,
@@ -237,10 +238,12 @@ class OrderExecutorBot:
             if is_new:
                 self._market_round += 1
             if is_new:
+                # cancel GTC order ที่ค้างจากตลาดที่แล้ว
+                await self._handle_market_transition(self._pending_order_id)
+                self._pending_order_id = None
                 # ล้าง order/position เก่าจากตลาดที่แล้ว
                 self._last_order_signal = None
                 self._last_skip_reason = None
-                self._monitoring = False
                 self._sl_duration_count = 0
                 self._traded_this_market = False
                 self._bus.reset_invert()
@@ -623,6 +626,7 @@ class OrderExecutorBot:
 
         self._last_order_signal = sig.signal
         self._traded_this_market = True
+        self._pending_order_id = result.get("orderID") or result.get("id")
         dry_tag = " [DRY RUN]" if settings.DRY_RUN else ""
         logger.info(
             f"ORDER {sig.signal}{dry_tag} @ ${entry_price:.3f} size={_DEFAULT_ORDER_SIZE_USDC} "
@@ -789,7 +793,17 @@ class OrderExecutorBot:
             f"token_id={token_id} size={size} actual_shares={actual_shares:.4f}"
         )
 
-        if actual_shares < 5.0 and actual_shares > 0:
+        if actual_shares == 0:
+            # GTC ยังไม่ fill — cancel order แทนการขาย
+            order_id = position.get("order_id") or self._pending_order_id
+            if order_id:
+                cancelled = await self._client.cancel_order(order_id)
+                logger.info(f"OrderExecutorBot: GTC not filled – cancelled order {order_id} = {cancelled}")
+                self._pending_order_id = None
+            else:
+                logger.warning("OrderExecutorBot: actual_shares=0 and no order_id to cancel")
+            result = {"status": "cancelled_unfilled"}
+        elif 0 < actual_shares < 5.0:
             # shares น้อยเกินไป ขายฝั่งตรงข้ามแทน (synthetic close)
             opposite_token = self._no_token_id if signal == "UP" else self._yes_token_id
             if opposite_token:
@@ -800,11 +814,18 @@ class OrderExecutorBot:
                 opp_price = clob_p if clob_p is not None else 0.99
                 result = await self._client.market_buy_opposite(opposite_token, opp_price, size)
             else:
-                logger.warning("OrderExecutorBot: no opposite token available, trying FOK anyway")
-                result = await self._client.market_sell_fok(token_id=token_id, size=size)
+                result = await self._client.market_sell_fok(token_id=token_id, size=actual_shares)
         else:
-            result = await self._client.market_sell_fok(token_id=token_id, size=size)
+            # ขายด้วย actual_shares จริง (ไม่ใช่ USDC)
+            result = await self._client.market_sell_fok(token_id=token_id, size=actual_shares)
 
+        if result.get("status") == "cancelled_unfilled":
+            logger.info("OrderExecutorBot: position closed via GTC cancel (no shares filled)")
+            self._monitoring = False
+            self._last_skip_reason = None
+            self._state._state["open_position"] = None
+            self._state._save()
+            return
         if result.get("error"):
             logger.error(f"OrderExecutorBot: close_position failed: {result['error']}")
         else:

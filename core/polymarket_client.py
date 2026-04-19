@@ -11,6 +11,7 @@ Endpoints used:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Optional
 
@@ -38,9 +39,10 @@ class PolymarketClient:
         self._client: Optional[httpx.AsyncClient] = None
         # CLOB price cache: token_id → (price, timestamp) — TTL 2s to avoid hammering
         self._clob_cache: dict[str, tuple[Optional[float], float]] = {}
-        # open-positions cache: wallet → (positions, timestamp) — TTL 5s to avoid flood
+        # open-positions cache: wallet → (positions, timestamp) — TTL 30s to avoid flood
         self._positions_cache: dict[str, tuple[list[dict], float]] = {}
         self._positions_error_until: dict[str, float] = {}  # backoff until timestamp
+        self._positions_lock: asyncio.Lock = asyncio.Lock()  # prevent concurrent requests
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -263,27 +265,35 @@ class PolymarketClient:
             cached = self._positions_cache.get(wallet)
             return cached[0] if cached else []
 
-        # return cached result if fresh (5 s TTL)
+        # return cached result if fresh (30 s TTL)
         cached = self._positions_cache.get(wallet)
-        if cached and (now - cached[1]) < 5.0:
+        if cached and (now - cached[1]) < 30.0:
             return cached[0]
 
-        url = f"{settings.DATA_API_URL}/positions"
-        params = {"user": wallet}
-        try:
-            client = await self._get_client()
-            resp = await client.get(url, params=params, timeout=httpx.Timeout(10.0))
-            resp.raise_for_status()
-            positions: list[dict] = resp.json()
-            self._positions_cache[wallet] = (positions, now)
-            self._positions_error_until.pop(wallet, None)
-            logger.debug(f"get_open_positions: {len(positions)} positions for {wallet}")
-            return positions
-        except Exception as exc:
-            logger.error(f"get_open_positions error for wallet={wallet}: {repr(exc)}")
-            self._positions_error_until[wallet] = now + 15.0  # backoff 15 s
+        # lock ensures only one HTTP request at a time (prevents 429 from concurrent tasks)
+        async with self._positions_lock:
+            # re-check cache after acquiring lock (another task may have already fetched)
+            now = time.time()
             cached = self._positions_cache.get(wallet)
-            return cached[0] if cached else []
+            if cached and (now - cached[1]) < 30.0:
+                return cached[0]
+
+            url = f"{settings.DATA_API_URL}/positions"
+            params = {"user": wallet}
+            try:
+                client = await self._get_client()
+                resp = await client.get(url, params=params, timeout=httpx.Timeout(10.0))
+                resp.raise_for_status()
+                positions: list[dict] = resp.json()
+                self._positions_cache[wallet] = (positions, time.time())
+                self._positions_error_until.pop(wallet, None)
+                logger.debug(f"get_open_positions: {len(positions)} positions for {wallet}")
+                return positions
+            except Exception as exc:
+                logger.error(f"get_open_positions error for wallet={wallet}: {repr(exc)}")
+                self._positions_error_until[wallet] = time.time() + 60.0  # backoff 60 s
+                cached = self._positions_cache.get(wallet)
+                return cached[0] if cached else []
 
     async def get_resolved_claimable(self, wallet: str) -> list[dict]:
         """

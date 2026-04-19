@@ -440,10 +440,12 @@ class OrderExecutorBot:
             else:
                 self._last_skip_reason = "ไม่มีราคา (CLOB+fallback ✗)"
                 return
+        else:
+            # CLOB ใช้ได้จริง — reset timer
+            self._clob_unavailable_since = None
         if price in settings.PRICE_FORBIDDEN:
             self._last_skip_reason = f"ราคา ${price:.3f} ห้ามเข้า"
             return
-        self._clob_unavailable_since = None
         # ปรับราคาตาม signal — ถ้า DOWN ใช้ราคา NO token = 1 - YES
         if sig.signal == "DOWN":
             price = round(1 - price, 4)
